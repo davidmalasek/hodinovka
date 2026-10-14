@@ -24,6 +24,9 @@ const BIG_STOP = '<svg class="i-stop" viewBox="0 0 18 18" aria-hidden="true"><re
 
 // ---------- pomocné ----------
 
+let busy = 0; // rozpracované požadavky – mezitím se stránka sama neobnoví
+let seenRev = null; // stav dat, který stránka ukazuje (viz živé obnovení)
+
 async function api(path, { method = 'GET', body } = {}) {
   const init = { method, headers: {} };
   if (body !== undefined) {
@@ -31,11 +34,15 @@ async function api(path, { method = 'GET', body } = {}) {
     init.headers['Content-Type'] = 'application/json';
   }
   let res;
+  busy++;
   try {
     res = await fetch('/api/' + path, init);
   } catch {
     throw new Error('Server Hodinovky neběží – stiskni ⌘R, nebo Hodinovku zavři a spusť znovu.');
+  } finally {
+    busy--;
   }
+  if (res.headers.get('X-Rev')) seenRev = res.headers.get('X-Rev'); // změnu udělala tahle stránka
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Chyba ${res.status}`);
   return data;
@@ -438,19 +445,21 @@ function groupByDay(rows) {
   return [...days.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 }
 
+let daysShown = { hash: '', count: DAYS_PAGE }; // kolik dní bylo vidět – po obnovení stránky zůstane
+
 /**
  * Seznam záznamů po dnech s výběrem, hromadnými akcemi a úpravou kliknutím.
  * Vrátí funkci, která seznam překreslí s jinými řádky (filtr).
  */
 function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' } = {}) {
   const selected = new Set();
-  let shown = DAYS_PAGE;
+  let shown = daysShown.hash === location.hash ? daysShown.count : DAYS_PAGE;
   el.innerHTML = `
     <div data-days></div>
     <div class="bulkbar" hidden>
       <span class="count"></span>
       <button type="button" class="btn ghost" data-bulk="clear">Zrušit výběr</button>
-      <button type="button" class="btn" data-bulk="mark">Označit jako vyfakturované</button>
+      <button type="button" class="btn" data-bulk="mark" title="Označí záznamy jako vyfakturované bez faktury">Jen označit</button>
       <button type="button" class="btn primary" data-bulk="bill">Vyfakturovat…</button>
     </div>`;
   const daysEl = $('[data-days]', el);
@@ -509,6 +518,7 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
     }
     if (e.target.closest('[data-more]')) {
       shown += DAYS_PAGE;
+      daysShown = { hash: location.hash, count: shown };
       return draw();
     }
     const tr = e.target.closest('tr[data-entry]');
@@ -537,7 +547,7 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
 
 async function markBilled(list, button) {
   if (!confirm(`Označit ${plural(list.length, 'záznam', 'záznamy', 'záznamů')} (${Fmt.clock(sumSecs(list))}) jako vyfakturované?\n\n` +
-    'Faktura se nevytvoří, záznamy se jen přesunou mezi vyfakturované. Fakturu rovnou ve Fakturách vytvoří tlačítko Vyfakturovat.')) return;
+    'Faktura se nevytvoří, záznamy se jen přesunou mezi vyfakturované. Fakturu ve Fakturách vytvoří tlačítko Vyfakturovat, nebo později detail vyúčtování.')) return;
   await attempt(async () => {
     await api('billings', { method: 'POST', body: { uid: newUid(), entry_ids: list.map(e => e.id), invoice: false } });
     toast(`${plural(list.length, 'záznam označen', 'záznamy označeny', 'záznamů označeno')} jako vyfakturované`);
@@ -607,7 +617,7 @@ function renderTime(params, entries, billings) {
     toggle.setAttribute('aria-label', e ? 'Zastavit časovač' : 'Spustit časovač');
     toggle.title = e ? 'Zastavit' : 'Spustit';
     if (e) {
-      desc.value = e.description;
+      desc.value = desc.defaultValue = e.description; // uložený popis není rozepsaný (viz živé obnovení)
       proj.value = e.project_id ?? '';
     } else {
       proj.value = lastProject() ?? '';
@@ -624,7 +634,9 @@ function renderTime(params, entries, billings) {
     clearTimeout(saveTimer);
     const values = pending;
     pending = {};
-    if (Timer.entry && Object.keys(values).length) Timer.set(await api('entries/' + Timer.entry.id, { method: 'PUT', body: values }));
+    if (!Timer.entry || !Object.keys(values).length) return;
+    Timer.set(await api('entries/' + Timer.entry.id, { method: 'PUT', body: values }));
+    if ('description' in values) desc.defaultValue = values.description;
   };
   const saveRunning = values => {
     Object.assign(Timer.entry, values);
@@ -945,10 +957,12 @@ async function viewBilling(params, ref) {
         <h1>${esc(billingTitle(b))} ${statusLabel(b)}</h1>
         <div class="actions">
           <a class="btn" href="/api/export/csv?vyuctovani=${esc(b.uid)}" download>Výkaz CSV</a>
-          ${b.invoice && state !== 'deleted' ? `<a class="btn primary" href="${esc(invoiceLink(b))}">Otevřít ve Fakturách</a>` : ''}
+          ${b.invoice && state !== 'deleted'
+            ? `<a class="btn primary" href="${esc(invoiceLink(b))}">Otevřít ve Fakturách</a>`
+            : `<a class="btn primary" href="#/vyfakturovat?vyuctovani=${esc(b.uid)}">Vytvořit fakturu…</a>`}
         </div>
       </div>
-      ${state === 'deleted' ? '<div class="notice bad">Faktura byla ve Fakturách smazána, záznamy jsou ale pořád označené jako vyfakturované. Když je chceš vyfakturovat znovu, vrať je mezi nevyfakturované.</div>' : ''}
+      ${state === 'deleted' ? '<div class="notice bad">Faktura byla ve Fakturách smazána, záznamy jsou ale pořád označené jako vyfakturované. Fakturu můžeš vytvořit znovu, nebo záznamy vrátit mezi nevyfakturované.</div>' : ''}
       ${state === 'cancelled' ? '<div class="notice">Faktura je ve Fakturách stornovaná. Když chceš práci vyfakturovat znovu, vrať záznamy mezi nevyfakturované.</div>' : ''}
       <div class="detail">
         <div>
@@ -992,19 +1006,23 @@ async function viewBilling(params, ref) {
 // ---------- vyfakturovat ----------
 
 async function viewBill(params) {
+  // ?vyuctovani=<uid> = faktura k záznamům, které už jsou jen označené jako vyfakturované
+  const later = params.get('vyuctovani');
   const ids = (params.get('zaznamy') || '').split(',').map(Number).filter(Boolean);
   const [preview, offered, peers] = await Promise.all([
-    api('billings/preview', { method: 'POST', body: { entry_ids: ids } }), api('offered'), api('peers'), loadRefs(),
+    later ? api(`billings/${encodeURIComponent(later)}/draft`) : api('billings/preview', { method: 'POST', body: { entry_ids: ids } }),
+    api('offered'), api('peers'), loadRefs(),
   ]);
-  return () => renderBill(ids, preview, offered, peers);
+  return () => renderBill(later ? preview.entry_ids : ids, preview, offered, peers);
 }
 
 function renderBill(ids, preview, offered, peers) {
   setTitle('Vyfakturovat');
   const faktury = peers.apps.find(a => a.id === 'faktury');
   const canInvoice = faktury && faktury.state !== 'missing';
+  const later = preview.billing; // záznamy už jsou označené, faktura se k nim vystaví dodatečně
   const state = {
-    uid: newUid(),
+    uid: later || newUid(),
     customer: preview.customer,
     clientId: preview.client_id,
     editing: false,
@@ -1015,20 +1033,20 @@ function renderBill(ids, preview, offered, peers) {
   let itemsEdited = false;
   const markDirty = () => (dirty = true);
   leaveGuard = () => dirty;
-  const back = '#/cas';
+  const back = later ? `#/vyuctovani/${encodeURIComponent(later)}` : '#/cas';
   const clients = refs.clients.slice().sort(byName);
 
   app.innerHTML = `
-    <a class="back" href="#/cas">‹ Čas</a>
+    <a class="back" href="${back}">${later ? '‹ Vyúčtování' : '‹ Čas'}</a>
     <div class="page-head">
       <div>
-        <h1>Vyfakturovat</h1>
+        <h1>${later ? 'Vytvořit fakturu' : 'Vyfakturovat'}</h1>
         <p class="subtitle">${plural(ids.length, 'záznam', 'záznamy', 'záznamů')} · ${Fmt.hours(preview.seconds)} (${Fmt.clock(preview.seconds)}) · ${esc(preview.note.replace('Období: ', ''))}</p>
       </div>
     </div>
     ${!faktury || faktury.state === 'missing' ? `
       <div class="notice info" style="display:flex;gap:8px 16px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-        <span>Na tomhle Macu nejsou Faktury. Nainstalují se samy a hned se s Hodinovkou propojí. Jinak záznamy jen označ jako vyfakturované.</span>
+        <span>Na tomhle Macu nejsou Faktury. Nainstalují se samy a hned se s Hodinovkou propojí.${later ? '' : ' Jinak záznamy jen označ jako vyfakturované.'}</span>
         <button type="button" class="btn primary" id="install">Nainstalovat Faktury</button>
       </div>` : ''}
     ${faktury && faktury.ready === false ? '<div class="notice">Ve Fakturách chybí tvoje údaje nebo číslo účtu, takže nebudou na faktuře. <a href="faktury://nastaveni">Doplnit v Nastavení Faktur</a></div>' : ''}
@@ -1046,7 +1064,7 @@ function renderBill(ids, preview, offered, peers) {
       <section class="card">
         <div class="card-head">
           <h2>Položky</h2>
-          <div class="segmented" role="group" aria-label="Položky faktury">${GROUPINGS.map(([k, label]) => `<button type="button" data-grouping="${k}" class="${k === state.grouping ? 'on' : ''}" aria-pressed="${k === state.grouping}">${label}</button>`).join('')}</div>
+          ${later ? '' : `<div class="segmented" role="group" aria-label="Položky faktury">${GROUPINGS.map(([k, label]) => `<button type="button" data-grouping="${k}" class="${k === state.grouping ? 'on' : ''}" aria-pressed="${k === state.grouping}">${label}</button>`).join('')}</div>`}
         </div>
         <table class="items">
           <thead><tr><th>Popis</th><th class="w-qty">Množství</th><th class="w-unit">Jednotka</th><th class="w-price">Cena za jedn.</th><th class="w-amount num">Celkem</th><th class="w-del"><span class="sr-only">Odebrat</span></th></tr></thead>
@@ -1061,7 +1079,7 @@ function renderBill(ids, preview, offered, peers) {
       </section>
       <div class="form-actions">
         <a class="btn" href="${back}">Zrušit</a>
-        <button type="button" class="btn" id="mark-only">Jen označit jako vyfakturované</button>
+        ${later ? '' : '<button type="button" class="btn" id="mark-only">Jen označit jako vyfakturované</button>'}
         <button type="submit" class="btn primary" ${canInvoice ? '' : 'disabled'}>Vytvořit fakturu ve Fakturách</button>
       </div>
     </form>`;
@@ -1200,13 +1218,15 @@ function renderBill(ids, preview, offered, peers) {
         (state.editing ? $('[data-c="name"]', box) : search).focus();
         throw new Error('Vyber nebo vyplň odběratele.');
       }
-      const b = await api('billings', { method: 'POST', body: body(true) });
+      const b = later
+        ? await api(`billings/${encodeURIComponent(later)}/invoice`, { method: 'POST', body: body(true) })
+        : await api('billings', { method: 'POST', body: body(true) });
       leaveGuard = null;
       toast(`Faktura ${b.invoice.number} je vytvořená ve Fakturách`);
       location.hash = `#/vyuctovani/${b.uid}`;
     }, e.submitter);
   };
-  $('#mark-only').onclick = e => attempt(async () => {
+  if (!later) $('#mark-only').onclick = e => attempt(async () => {
     const b = await api('billings', { method: 'POST', body: body(false) });
     leaveGuard = null;
     toast('Označeno jako vyfakturované');
@@ -1673,6 +1693,42 @@ async function showVersion() {
   if (button) button.onclick = () => installUpdate();
 }
 
+// ---------- živé obnovení ----------
+
+/* Když se data změní jinde (ve Fakturách, v druhém okně nebo v prohlížeči), otevřená stránka se sama obnoví.
+   Neruší: počká, dokud uživatel něco píše, má otevřený dialog, vybrané řádky nebo neuložené změny. */
+function canRefresh() {
+  const el = document.activeElement;
+  // rozepsaný text (kromě hledání, to se po obnovení vrátí) by obnovení smazalo
+  const typed = $$('input, textarea', app).some(i => !['search', 'checkbox', 'radio', 'file'].includes(i.type) && i.value !== i.defaultValue);
+  return !busy && !leaveGuard?.() && !typed && !$('dialog[open]') && !$('.bulkbar:not([hidden])') &&
+    !(el && app.contains(el) && el.matches('input, textarea, select')) && !String(window.getSelection?.() || '');
+}
+
+async function refreshView() {
+  const q = $('#search')?.value;
+  await router(false);
+  const search = $('#search');
+  if (q && search && !search.value) {
+    search.value = q;
+    search.dispatchEvent(new Event('input'));
+  }
+}
+
+async function watchChanges() {
+  if (document.hidden) return;
+  const r = await fetch('/api/rev').then(res => res.json()).catch(() => null);
+  if (!r?.rev || r.rev === seenRev) return;
+  if (seenRev !== null && !canRefresh()) return; // zkusí to znovu za chvíli
+  const changed = seenRev !== null;
+  seenRev = r.rev;
+  if (changed) refreshView();
+}
+
+setInterval(watchChanges, 2000);
+window.addEventListener('focus', watchChanges);
+document.addEventListener('visibilitychange', watchChanges);
+
 // ---------- směrování ----------
 
 const routes = [
@@ -1752,6 +1808,7 @@ app.addEventListener('click', e => {
 });
 
 Timer.refresh();
+watchChanges();
 router();
 announceUpdate();
 checkForUpdate();

@@ -1,5 +1,6 @@
 """Data Hodinovky – vše je v jednom čitelném souboru data/hodinovka.json."""
 import csv
+import hashlib
 import io
 import json
 import os
@@ -134,6 +135,18 @@ def sync_peers():
 def offered_contacts(data):
     """Kontakty z ostatních aplikací, které v Hodinovce ještě nejsou – nabízí se při výběru klienta."""
     return mejvos.offered_contacts(data["clients"], mejvos.peer_contacts(APP_ID))
+
+
+def revision():
+    """Otisk dat pro živé obnovení okna. Změní se po každém uložení (i z jiného okna nebo z prohlížeče)
+    a když jiná aplikace zveřejní nové kontakty nebo stav faktur."""
+    try:
+        st = DATA_FILE.stat()
+        own = (st.st_mtime_ns, st.st_size, st.st_ino)  # ukládá se vždy do nového souboru (viz _save)
+    except OSError:
+        own = None
+    sig = (own, mejvos.signature("contacts", APP_ID), mejvos.signature("invoices", APP_ID))
+    return hashlib.sha1(repr(sig).encode()).hexdigest()[:16]
 
 
 def invoice_states():
@@ -612,12 +625,6 @@ def billing_preview(data, entry_ids, grouping=None):
 
     first = mejvos.parse_time(rows[0]["start"]).astimezone().date()
     last = max(mejvos.parse_time(e["end"]).astimezone().date() for e in rows)
-    if first == last:
-        period = _cz_date(first)
-    elif first.year == last.year:
-        period = f"{first.day}. {first.month}. – {_cz_date(last)}"
-    else:
-        period = f"{_cz_date(first)} – {_cz_date(last)}"
 
     return {
         "entry_ids": [e["id"] for e in rows],
@@ -629,8 +636,18 @@ def billing_preview(data, entry_ids, grouping=None):
         "client_id": clients[0]["id"] if clients else None,
         "warnings": warnings,
         "period": [first.isoformat(), last.isoformat()],
-        "note": f"Období: {period}",
+        "note": _period_note(first, last),
     }
+
+
+def _period_note(first, last):
+    if first == last:
+        period = _cz_date(first)
+    elif first.year == last.year:
+        period = f"{first.day}. {first.month}. – {_cz_date(last)}"
+    else:
+        period = f"{_cz_date(first)} – {_cz_date(last)}"
+    return f"Období: {period}"
 
 
 def _clean_items(items):
@@ -669,30 +686,68 @@ def check_billing(data, values):
     Bez položek (jen „označit jako vyfakturované“) se položky spočítají samy."""
     rows = _billable(data, values.get("entry_ids"))
     preview = billing_preview(data, [e["id"] for e in rows], values.get("grouping"))
-    items = _clean_items(values["items"]) if values.get("items") is not None else preview["items"]
-    given = values.get("customer") or preview["customer"] or {}
+    invoice = _check_invoice(data, values, preview, required=bool(values.get("invoice")))
+    return {
+        "uid": _text(values.get("uid")) or mejvos.new_uid(),
+        "entry_ids": [e["id"] for e in rows],
+        "items": invoice["items"],
+        "total": invoice["total"],
+        "seconds": preview["seconds"],
+        "period": preview["period"],
+        "customer": invoice["customer"],
+        "client_id": invoice["client_id"],
+        "note": _text(values.get("note")),
+    }
+
+
+def _check_invoice(data, values, default, required, late=False):
+    """Položky, odběratel a součet faktury; co v values chybí, vezme z default (návrhu nebo vyúčtování)."""
+    items = _clean_items(values["items"]) if values.get("items") is not None else default["items"]
+    given = values.get("customer") or default["customer"] or {}
     customer = {k: _text(given.get(k)) for k in CUSTOMER_FIELDS}
     customer["uid"] = _text(given.get("uid"))
     total = _money(sum((Decimal(str(i["amount"])) for i in items), Decimal(0)))
-    if values.get("invoice"):
+    if required:
         if not customer["name"]:
             raise ValueError("Vyber nebo vyplň odběratele.")
         if not items:
             raise ValueError("Faktura musí mít aspoň jednu položku.")
         if total <= 0:
-            raise ValueError("Faktura by byla na 0 Kč. Doplň ceny, nebo záznamy jen označ jako vyfakturované.")
-    client_id = _int(values.get("client_id", preview["client_id"]))
+            raise ValueError("Faktura by byla na 0 Kč. Doplň ceny." if late else
+                             "Faktura by byla na 0 Kč. Doplň ceny, nebo záznamy jen označ jako vyfakturované.")
+    client_id = _int(values.get("client_id", default["client_id"]))
     return {
-        "uid": _text(values.get("uid")) or mejvos.new_uid(),
-        "entry_ids": [e["id"] for e in rows],
         "items": items,
         "total": total,
-        "seconds": preview["seconds"],
-        "period": preview["period"],
         "customer": customer if customer["name"] else None,
         "client_id": client_id if any(c["id"] == client_id for c in data["clients"]) else None,
-        "note": _text(values.get("note")),
     }
+
+
+def billing_draft(data, ref):
+    """Návrh faktury k vyúčtování, které je zatím jen označené: to, co se při označení uložilo.
+    Před vystavením jde všechno změnit, stejně jako u nového vyúčtování."""
+    b = find_billing(data, ref)
+    first, last = (date.fromisoformat(d) for d in b["period"])
+    return {
+        "billing": b["uid"],
+        "entry_ids": b["entry_ids"],
+        "grouping": None,
+        "items": b["items"],
+        "total": b["total"],
+        "seconds": b["seconds"],
+        "customer": b["customer"],
+        "client_id": b["client_id"],
+        "warnings": [],
+        "period": b["period"],
+        "note": b["note"] or _period_note(first, last),
+    }
+
+
+def check_late_invoice(data, billing, values):
+    """Ověří fakturu, která se k vyúčtování vystavuje dodatečně. Vrátí, co se ve vyúčtování změní."""
+    invoice = _check_invoice(data, values, billing, required=True, late=True)
+    return {**invoice, "note": _text(values["note"]) if "note" in values else billing["note"]}
 
 
 def create_billing(data, checked, invoice=None):

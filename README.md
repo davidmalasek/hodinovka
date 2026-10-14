@@ -40,6 +40,8 @@ Hodinovka a [Faktury](https://github.com/davidmalasek/faktury) patří do jednoh
 
 - **Klienti se sdílí.** Kontakt z Faktur se ti nabídne při zakládání projektu v Hodinovce a klient z Hodinovky se nabídne u nové faktury. Jakmile ho jednou použiješ, zůstanou propojené a změny údajů (třeba doplněné IČO) se přenesou do druhé aplikace.
 - **Vyfakturovat** vytvoří fakturu ve Fakturách. Číslo, splatnost a tvoje údaje doplní Faktury, PDF s QR platbou se vytvoří při jejím otevření. Tlačítko „Otevřít ve Fakturách“ tě na ni přenese.
+- **Jen označit** fakturu nevytvoří. Když ji k označeným záznamům budeš chtít později, otevři vyúčtování (Přehled → Vyúčtování) a dej Vytvořit fakturu.
+- **Všechno hned.** Otevřené okno se samo obnoví, když se něco změní v druhé aplikaci: faktura se ve Fakturách ukáže do pár vteřin a zaplacení uvidíš v Hodinovce, aniž bys cokoli načítal znovu.
 - **Když Faktury na Macu nejsou,** Hodinovka je nabídne nainstalovat jedním kliknutím. Stáhnou se z GitHubu do Aplikací a hned se propojí. Bez nich můžeš záznamy jen označovat jako vyfakturované.
 - Faktury neběží? Hodinovka si je na pozadí spustí sama.
 
@@ -79,7 +81,7 @@ Výjimečně se změní i okno aplikace. Pak se stáhne nová Hodinovka.app a ap
 - **Pevná cena:** vyfakturuje se jednou, bez ohledu na čas. Další záznamy na stejném projektu se pak nabídnou za 0 Kč (třeba když fakturuješ další část, cenu přepíšeš).
 - **Položky:** jedna za projekt, nebo jedna za každý popis práce. Obojí jde přepnout přímo u fakturace a položky ručně upravit, přidat nebo smazat.
 - **Odběratel:** výchozí je klient projektu. Můžeš vybrat jiný kontakt z Hodinovky nebo z Faktur, nebo zadat nového (s načtením z ARES). Faktura se pak vystaví na něj a ve Fakturách se uloží do kontaktů.
-- **Bez Faktur:** „Jen označit jako vyfakturované“ si zapamatuje, co a za kolik jsi vyúčtoval, ale fakturu nevytvoří.
+- **Bez Faktur:** „Jen označit“ si zapamatuje, co a za kolik jsi vyúčtoval, ale fakturu nevytvoří. Vytvoříš ji kdykoli později v detailu vyúčtování (i znovu, když fakturu ve Fakturách smažeš).
 
 Stejné záznamy nejde vyfakturovat dvakrát, a když se během vystavování ztratí spojení, opakované kliknutí fakturu nezdvojí.
 

@@ -293,6 +293,15 @@ class MejvosTests(TempData):
         published = json.loads((mejvos.HOME / "contacts/hodinovka.json").read_text(encoding="utf-8"))
         self.assertEqual([c["name"] for c in published["items"]], ["A", "B"])
 
+    def test_unchanged_lists_are_not_rewritten(self):
+        mejvos.ENABLED = True
+        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
+        sig = mejvos.signature("contacts")
+        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
+        self.assertEqual(mejvos.signature("contacts"), sig)  # ostatní se zbytečně neobnovují
+        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "B"}])
+        self.assertNotEqual(mejvos.signature("contacts"), sig)
+
     def test_uninstalled_apps_are_ignored(self):
         launcher = self.manifest("faktury")
         self.assertEqual([a["id"] for a in mejvos.apps()], ["faktury"])
@@ -588,6 +597,47 @@ class ServerTests(TempData):
         self.assertEqual(self.call("GET", "/api/billings/u-1")[1]["invoice_state"]["status"], "deleted")
         peers = self.call("GET", "/api/peers")[1]
         self.assertEqual((peers["apps"][0]["id"], peers["apps"][0]["ready"]), ("faktury", True))
+
+    def test_invoice_later_for_marked_entries(self):
+        _, ids = self.make_entries()
+        self.call("POST", "/api/billings", {"uid": "m-1", "entry_ids": ids})  # jen označit
+        status, draft = self.call("GET", "/api/billings/m-1/draft")
+        self.assertEqual((status, draft["billing"], draft["entry_ids"], draft["total"]), (200, "m-1", ids, 3000.0))
+        self.assertEqual(draft["customer"]["name"], "Kavárna")
+        self.assertTrue(draft["note"].startswith("Období: "))
+        body = {"customer": draft["customer"], "items": [{**draft["items"][0], "price": 1200}], "note": draft["note"]}
+        status, err = self.call("POST", "/api/billings/m-1/invoice", body)
+        self.assertEqual(status, 400)
+        self.assertIn("nejsou Faktury", err["error"])
+        self.assertIsNone(self.stored()["billings"][0]["invoice"])
+
+        fake = FakeFaktury(mejvos.HOME)
+        self.addCleanup(fake.close)
+        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        status, b = self.call("POST", "/api/billings/m-1/invoice", body)
+        self.assertEqual((status, b["invoice"]["number"], b["total"], b["invoice_state"]["status"]), (200, "20260001", 3600.0, "issued"))
+        self.assertEqual(fake.invoices[0]["body"]["source"]["ref"], "m-1")
+        self.assertEqual(self.call("POST", "/api/billings/m-1/invoice", body)[1]["invoice"]["id"], 1)  # druhé kliknutí
+        self.assertEqual(len(fake.invoices), 1)
+        self.assertTrue(all(e["billing_id"] == b["id"] for e in self.stored()["entries"]))
+
+        fake.invoices.clear()  # ve Fakturách ji smazali – jde vystavit znovu
+        fake.publish()
+        status, again = self.call("POST", "/api/billings/m-1/invoice", {})
+        self.assertEqual((status, again["invoice_state"]["status"], fake.invoices[0]["total"]), (200, "issued", 3600.0))
+
+    def test_revision_follows_changes(self):
+        _, first = self.call("GET", "/api/rev")
+        self.assertEqual(self.call("GET", "/api/rev")[1], first)
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/clients", data=json.dumps({"name": "A"}).encode(),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            own = r.headers["X-Rev"]  # okno pozná svoji změnu
+        _, now = self.call("GET", "/api/rev")
+        self.assertNotEqual(now, first)
+        self.assertEqual(own, now["rev"])
+        mejvos._write_json(mejvos.HOME / "invoices/faktury.json", {"items": []})  # Faktury zveřejnily stav
+        self.assertNotEqual(self.call("GET", "/api/rev")[1], now)
 
     def test_failed_invoice_marks_nothing(self):
         fake = FakeFaktury(mejvos.HOME)

@@ -65,31 +65,44 @@ def ares_lookup(ico):
 
 # ---------- vyúčtování a faktury ----------
 
+def send_invoice(billing):
+    """Vystaví ve Fakturách fakturu k vyúčtování a vrátí odkaz na ni. Faktury podle uid vyúčtování
+    poznají opakovaný požadavek (třeba po výpadku) a vrátí už vystavenou fakturu místo nové."""
+    app = mejvos.ensure("invoices", exclude=db.APP_ID)
+    if not app:
+        raise ValueError("Na tomhle Macu nejsou Faktury. Stáhni je, nebo záznamy jen označ jako vyfakturované.")
+    created = mejvos.call(app, "POST", "invoices", {
+        "customer": billing["customer"],
+        "items": [{k: it[k] for k in ("description", "quantity", "unit", "price")} for it in billing["items"]],
+        "note": billing["note"],
+        "source": {"app": db.APP_ID, "name": NAME, "ref": billing["uid"],
+                   "link": f"{db.APP_ID}://vyuctovani/{billing['uid']}"},
+    })
+    return {"app": app["id"], "app_name": app.get("name") or app["id"], "id": created["id"],
+            "number": created["number"], "scheme": app.get("scheme") or app["id"]}
+
+
 def bill(body):
     """Vyúčtuje záznamy: buď jen označí jako vyfakturované, nebo rovnou vystaví fakturu ve Fakturách.
-    Zámek dat drží celou dobu, takže stejné záznamy nejdou vyfakturovat dvakrát. Faktury podle uid
-    poznají opakovaný požadavek (třeba po výpadku) a vrátí už vystavenou fakturu místo nové."""
+    Zámek dat drží celou dobu, takže stejné záznamy nejdou vyfakturovat dvakrát."""
     with db.open_data(write=True) as data:
         uid = db._text(body.get("uid"))
         for b in data["billings"]:
             if uid and b["uid"] == uid:
                 return b
         checked = db.check_billing(data, body)
-        invoice = None
-        if body.get("invoice"):
-            app = mejvos.ensure("invoices", exclude=db.APP_ID)
-            if not app:
-                raise ValueError("Na tomhle Macu nejsou Faktury. Stáhni je, nebo záznamy jen označ jako vyfakturované.")
-            created = mejvos.call(app, "POST", "invoices", {
-                "customer": checked["customer"],
-                "items": [{k: it[k] for k in ("description", "quantity", "unit", "price")} for it in checked["items"]],
-                "note": checked["note"],
-                "source": {"app": db.APP_ID, "name": NAME, "ref": checked["uid"],
-                           "link": f"{db.APP_ID}://vyuctovani/{checked['uid']}"},
-            })
-            invoice = {"app": app["id"], "app_name": app.get("name") or app["id"], "id": created["id"],
-                       "number": created["number"], "scheme": app.get("scheme") or app["id"]}
-        return db.create_billing(data, checked, invoice)
+        return db.create_billing(data, checked, send_invoice(checked) if body.get("invoice") else None)
+
+
+def invoice_later(ref, body):
+    """Vystaví fakturu k vyúčtování, které bylo zatím jen označené (nebo jehož fakturu ve Fakturách smazali)."""
+    with db.open_data(write=True) as data:
+        b = db.find_billing(data, ref)
+        if b.get("invoice") and with_invoice_state([b])[0]["invoice_state"]["status"] != "deleted":
+            return b  # faktura už je (třeba po druhém kliknutí)
+        b.update(db.check_late_invoice(data, b, body))
+        b["invoice"] = send_invoice(b)
+        return b
 
 
 def with_invoice_state(billings):
@@ -155,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if self.command != "GET":
+            self.send_header("X-Rev", db.revision())  # okno tak pozná, že změnu udělalo samo
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -272,9 +287,13 @@ class Handler(BaseHTTPRequestHandler):
                                    "protocol": mejvos.PROTOCOL, "provides": list(PROVIDES)})
 
         db.sync_peers()
+        if res == "rev" and method == "GET":
+            return self.send_json({"rev": db.revision()})
         body = self.read_json() if method in ("POST", "PUT") else None
         if res == "billings" and method == "POST" and rid is None:
             return self.send_json(bill(body), 201)
+        if res == "billings" and method == "POST" and rid is not None and sub == "invoice":
+            return self.send_json(with_invoice_state([invoice_later(rid, body)])[0])
         if res == "export" and rid == "csv" and method == "GET":
             with db.open_data() as data:
                 text = db.entries_csv(data, filter_entries(data, query))
@@ -363,6 +382,8 @@ class Handler(BaseHTTPRequestHandler):
                 return db.list_billings(data)
             if method == "POST" and rid == "preview":
                 return db.billing_preview(data, body.get("entry_ids"), body.get("grouping"))
+            if rid is not None and sub == "draft" and method == "GET":
+                return db.billing_draft(data, rid)
             if rid is not None and method == "GET":
                 return db.find_billing(data, rid)
             if rid is not None and method == "DELETE":
