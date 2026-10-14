@@ -263,6 +263,10 @@ class Handler(BaseHTTPRequestHandler):
             self.read_json()
             mejvos.install(rid)
             return self.send_json(peers())
+        if res == "peers" and method == "POST" and isinstance(rid, str) and sub == "open":
+            self.read_json()
+            mejvos.open_app(rid)
+            return self.send_json({"ok": True})
         if res == "os" and method == "GET" and rid is None:
             return self.send_json({"id": db.APP_ID, "name": NAME, "version": update.current_version(),
                                    "protocol": mejvos.PROTOCOL, "provides": list(PROVIDES)})

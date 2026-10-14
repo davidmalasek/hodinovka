@@ -1435,7 +1435,7 @@ async function viewClients() {
           <thead><tr><th>Název</th><th class="hide-sm">IČO</th><th class="num hide-sm">Projektů</th><th class="num">Odpracováno</th><th class="num">Nevyfakturováno</th></tr></thead>
           <tbody>${rows.map(c => `
             <tr data-href="#/klient/${c.id}">
-              <td class="strong"><a href="#/klient/${c.id}" style="color:inherit">${esc(c.name)}</a>${c.linked.length ? `<div class="linked" style="font-weight:400">propojeno: ${esc(c.linked.join(', '))}</div>` : ''}</td>
+              <td class="strong"><a href="#/klient/${c.id}" style="color:inherit">${esc(c.name)}</a>${c.linked.length ? `<div style="margin-top:2px;font-weight:400"><span class="linked">propojeno: ${esc(c.linked.join(', '))}</span></div>` : ''}</td>
               <td class="hide-sm">${esc(c.ico)}</td>
               <td class="num hide-sm">${c.project_count}</td>
               <td class="num">${Fmt.hours(c.seconds)}</td>
@@ -1556,7 +1556,7 @@ async function viewSettings() {
             ${a.state === 'running' || a.state === 'ready'
               ? `<span class="state ok">✓ Propojeno${a.version ? ` · verze ${esc(a.version)}` : ''}</span><a class="btn" href="${esc(a.scheme || a.id)}://">Otevřít</a>`
               : a.state === 'installed'
-                ? `<span class="state muted">Propojí se po prvním otevření</span><a class="btn" href="${esc(a.id)}://">Otevřít</a>`
+                ? `<span class="state muted">Propojí se po prvním otevření</span><button type="button" class="btn" data-open="${esc(a.id)}">Otevřít</button>`
                 : `<a class="btn ghost" href="${esc(a.web)}" target="_blank" rel="noopener">Co to je</a><button type="button" class="btn primary" data-install="${esc(a.id)}">Nainstalovat</button>`}
           </div>`).join('')}
         </div>
@@ -1574,6 +1574,10 @@ async function viewSettings() {
       </section>`;
     showVersion();
     $$('[data-install]').forEach(b => (b.onclick = () => installPeer(b.dataset.install, b)));
+    $$('[data-open]').forEach(b => (b.onclick = () => attempt(async () => {
+      await api(`peers/${b.dataset.open}/open`, { method: 'POST', body: {} });
+      toast('Otevírám… po prvním spuštění se aplikace propojí sama');
+    }, b)));
 
     const form = $('#settings-form');
     form.addEventListener('input', () => (dirty = true));
