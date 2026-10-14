@@ -120,6 +120,8 @@ const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ?
 const setTitle = t => (document.title = t ? `${t} – Hodinovka` : 'Hodinovka');
 const contactLabel = c => (c.ico ? `${c.name} (IČO ${c.ico})` : c.name);
 const offeredLabel = c => `${contactLabel(c)} — ${c.app_name}`;
+// Skutečná ikona aplikace systému. Ikony všech aplikací jsou v static/mejvos (v každé aplikaci stejné).
+const appIcon = (id, size = 16) => `<img class="app-icon" src="mejvos/${esc(encodeURIComponent(id))}.svg" alt="" width="${size}" height="${size}">`;
 const pickCustomer = c => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, c?.[k] || '']));
 const addressLines = p => [p.street, [p.zip, p.city].filter(Boolean).join(' '), p.country].filter(Boolean);
 
@@ -1461,7 +1463,7 @@ async function viewClients() {
             <tbody>${offered.slice().sort(byName).map(c => `
               <tr>
                 <td class="strong">${esc(c.name)}<div class="muted" style="font-weight:400;font-size:13px">${esc([c.ico && `IČO ${c.ico}`, c.city].filter(Boolean).join(' · '))}</div></td>
-                <td class="hide-sm"><span class="linked">${esc(c.app_name)}</span></td>
+                <td class="hide-sm"><span class="linked">${appIcon(c.app)}${esc(c.app_name)}</span></td>
                 <td class="num"><button type="button" class="btn" data-adopt="${esc(c.uid)}">Přidat</button></td>
               </tr>`).join('')}
             </tbody>
@@ -1475,7 +1477,7 @@ async function viewClients() {
           <thead><tr><th>Název</th><th class="hide-sm">IČO</th><th class="num hide-sm">Projektů</th><th class="num">Odpracováno</th><th class="num">Nevyfakturováno</th></tr></thead>
           <tbody>${rows.map(c => `
             <tr data-href="#/klient/${c.id}">
-              <td class="strong"><a href="#/klient/${c.id}" style="color:inherit">${esc(c.name)}</a>${c.linked.length ? `<div style="margin-top:2px;font-weight:400"><span class="linked">propojeno: ${esc(c.linked.join(', '))}</span></div>` : ''}</td>
+              <td class="strong"><a href="#/klient/${c.id}" style="color:inherit">${esc(c.name)}</a>${c.linked.length ? `<div style="margin-top:2px;font-weight:400"><span class="linked">propojeno:${c.linked.map(a => `<span class="linked">${appIcon(a.app)}${esc(a.name)}</span>`).join('')}</span></div>` : ''}</td>
               <td class="hide-sm">${esc(c.ico)}</td>
               <td class="num hide-sm">${c.project_count}</td>
               <td class="num">${Fmt.hours(c.seconds)}</td>
@@ -1510,7 +1512,7 @@ async function viewClient(params, id) {
         <h1>${id ? esc(client.name) : 'Nový klient'}</h1>
         ${id ? `<a class="btn primary" href="#/projekt/novy?klient=${id}">Nový projekt</a>` : ''}
       </div>
-      ${id && client.linked.length ? `<div class="notice info">Klient je propojený s aplikací ${esc(client.linked.join(', '))}. Změny údajů se přenesou i tam.</div>` : ''}
+      ${id && client.linked.length ? `<div class="notice info">Klient je propojený s aplikací ${esc(client.linked.map(a => a.name).join(', '))}. Změny údajů se přenesou i tam.</div>` : ''}
       <form id="client-form" class="card" autocomplete="off" novalidate>
         <div class="grid">
           ${contactFields(client, 'name')}
@@ -1591,7 +1593,7 @@ async function viewSettings() {
         <p style="margin-top:0">Hodinovka patří do systému <b>${esc(peers.system)}</b>. Aplikace na tomhle Macu se najdou samy, sdílí klienty a z Hodinovky jde jedním kliknutím vystavit fakturu ve Fakturách.</p>
         <div class="apps">${peers.apps.map(a => `
           <div class="app-row">
-            <span class="app-icon ${esc(a.id)}" aria-hidden="true">${esc(a.name.charAt(0))}</span>
+            ${appIcon(a.id, 36)}
             <span class="who"><b>${esc(a.name)}</b><span>${esc(a.description)}</span></span>
             ${a.state === 'running' || a.state === 'ready'
               ? `<span class="state ok">✓ Propojeno${a.version ? ` · verze ${esc(a.version)}` : ''}</span><a class="btn" href="${esc(a.scheme || a.id)}://">Otevřít</a>`

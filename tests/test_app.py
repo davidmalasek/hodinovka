@@ -364,6 +364,8 @@ class MejvosTests(TempData):
         db.sync_peers()
         stored = self.stored()["clients"][0]
         self.assertEqual((stored["name"], stored["ico"], stored["note"]), ("Kavárna s.r.o.", "12345678", "moje poznámka"))
+        with db.open_data() as data:
+            self.assertEqual(db.list_clients(data)[0]["linked"], [{"app": "faktury", "name": "Faktury"}])
         # starší údaje z jiné aplikace nic nepřepíšou a prázdné hodnoty nic nesmažou
         with db.open_data(True) as data:
             db.save_client(data, {**data["clients"][0], "name": "Kavárna U Mlýna"}, c["id"])
@@ -401,6 +403,12 @@ class MejvosTests(TempData):
             apps = mejvos.overview("hodinovka")["apps"]
         self.assertEqual([(a["id"], a["state"]) for a in apps], [("faktury", "running")])
         self.assertIn("Faktury.zip", apps[0]["download"])
+
+    def test_app_icons(self):
+        # Nastavení ukazuje skutečné ikony aplikací: složka je v každé aplikaci stejná a zná celý katalog
+        icons = db.ROOT / "static/mejvos"
+        self.assertEqual(sorted(p.stem for p in icons.glob("*.svg")), sorted(mejvos.CATALOG))
+        self.assertEqual((icons / f"{db.APP_ID}.svg").read_bytes(), (db.ROOT / "static/icon.svg").read_bytes())
 
 
 class FakeFaktury:

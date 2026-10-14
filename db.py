@@ -334,13 +334,14 @@ def save_settings(data, values):
 
 def list_clients(data):
     stats = project_stats(data)
-    linked = {}
+    linked = {}  # uid → {id aplikace: název}
     for peer in mejvos.peer_contacts(APP_ID):
-        linked.setdefault(peer["uid"], []).append(peer["app_name"])
+        linked.setdefault(peer["uid"], {})[peer["app"]] = peer["app_name"]
     out = []
     for c in data["clients"]:
         mine = [stats[p["id"]] for p in data["projects"] if p.get("client_id") == c["id"]]
-        out.append({**c, "project_count": len(mine), "linked": sorted(set(linked.get(c["uid"], []))),
+        apps = sorted(linked.get(c["uid"], {}).items(), key=lambda a: a[1])
+        out.append({**c, "project_count": len(mine), "linked": [{"app": a, "name": n} for a, n in apps],
                     "seconds": sum(s["seconds"] for s in mine),
                     "unbilled_seconds": sum(s["unbilled_seconds"] for s in mine),
                     "unbilled_amount": round(sum(s["unbilled_amount"] for s in mine), 2)})
