@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb340"/>
+      <stop offset="1" stop-color="#ff7a00"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#fbf4ec"/>
+    </linearGradient>
+    <filter id="tile" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+    <filter id="lift" filterUnits="userSpaceOnUse" x="100" y="100" width="824" height="824">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#9a4100" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#tile)"/>
+  <g filter="url(#lift)">
+    <rect x="454" y="216" width="116" height="59" rx="26" fill="#fff"/>
+    <rect x="491.4" y="254" width="41.2" height="66" fill="#fff"/>
+    <rect x="669" y="288" width="77" height="51.5" rx="21" fill="#fff" transform="rotate(45 707.7 313.7)"/>
+    <circle cx="512" cy="563.5" r="225" fill="url(#face)"/>
+  </g>
+  <path d="M512 563.5V389.7A173.8 173.8 0 0 1 662.6 650.4Z" fill="#ffdcab"/>
+  <path d="M512 563.5L662.6 650.4" stroke="#f07800" stroke-width="36" stroke-linecap="round"/>
+  <circle cx="512" cy="563.5" r="36" fill="#f07800"/>
+</svg>

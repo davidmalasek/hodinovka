@@ -1,0 +1,14 @@
+# Osobní údaje – do gitu nikdy:
+# odpracovaný čas, klienti, zálohy, log serveru
+data/
+# výkazy práce exportované kamkoli mimo data/
+*.csv
+
+# Spouštěč se vytváří skriptem instalovat.sh
+Hodinovka.app/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.claude/settings.local.json

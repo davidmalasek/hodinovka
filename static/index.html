@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <title>Hodinovka</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <a class="skip" href="#app">Přeskočit na obsah</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/cas" translate="no"><img src="icon.svg" alt="" width="22" height="22">Hodinovka</a>
+      <nav aria-label="Hlavní navigace">
+        <a href="#/cas" data-nav="cas">Čas</a>
+        <a href="#/prehled" data-nav="prehled vyuctovani vyfakturovat">Přehled</a>
+        <a href="#/projekty" data-nav="projekt">Projekty</a>
+        <a href="#/klienti" data-nav="klient">Klienti</a>
+        <a href="#/nastaveni" data-nav="nastaveni">Nastavení</a>
+      </nav>
+      <div class="pill" id="pill" hidden>
+        <a href="#/cas" aria-label="Běžící časovač"><span class="rec" aria-hidden="true"></span><span class="time" data-elapsed></span><span class="label" id="pill-label"></span></a>
+        <button type="button" class="icon-btn" id="pill-stop" aria-label="Zastavit časovač" title="Zastavit"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2"/></svg></button>
+      </div>
+    </div>
+  </header>
+  <div id="update" class="update-bar" role="status" hidden></div>
+  <main id="app" tabindex="-1"></main>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="fmt.js"></script>
+  <script src="charts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
