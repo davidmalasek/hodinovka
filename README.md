@@ -36,7 +36,7 @@
 
 ## Propojení s Fakturami
 
-Hodinovka a [Faktury](https://github.com/davidmalasek/faktury) patří do jednoho systému aplikací (pracovně **MejvOS**). Když jsou na Macu obě, najdou se samy a nic se nenastavuje:
+Hodinovka a [Faktury](https://github.com/davidmalasek/faktury) patří do jednoho systému aplikací **MejvOS**. Když jsou na Macu obě, najdou se samy a nic se nenastavuje:
 
 - **Klienti se sdílí.** Kontakt z Faktur se ti nabídne při zakládání projektu v Hodinovce a klient z Hodinovky se nabídne u nové faktury. Jakmile ho jednou použiješ, zůstanou propojené a změny údajů (třeba doplněné IČO) se přenesou do druhé aplikace.
 - **Vyfakturovat** vytvoří fakturu ve Fakturách. Číslo, splatnost a tvoje údaje doplní Faktury, PDF s QR platbou se vytvoří při jejím otevření. Tlačítko „Otevřít ve Fakturách“ tě na ni přenese.
