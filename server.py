@@ -70,7 +70,7 @@ def send_invoice(billing):
     poznají opakovaný požadavek (třeba po výpadku) a vrátí už vystavenou fakturu místo nové."""
     app = mejvos.ensure("invoices", exclude=db.APP_ID)
     if not app:
-        raise ValueError("Na tomhle Macu nejsou Faktury. Stáhni je, nebo záznamy jen označ jako vyfakturované.")
+        raise ValueError("Na tomhle Macu nejsou Faktury. Nainstaluj je a zkus to znovu.")
     created = mejvos.call(app, "POST", "invoices", {
         "customer": billing["customer"],
         "items": [{k: it[k] for k in ("description", "quantity", "unit", "price")} for it in billing["items"]],
@@ -83,7 +83,7 @@ def send_invoice(billing):
 
 
 def bill(body):
-    """Vyúčtuje záznamy: buď jen označí jako vyfakturované, nebo rovnou vystaví fakturu ve Fakturách.
+    """Vyúčtuje záznamy: vystaví ve Fakturách fakturu a záznamy označí jako vyfakturované.
     Zámek dat drží celou dobu, takže stejné záznamy nejdou vyfakturovat dvakrát."""
     with db.open_data(write=True) as data:
         uid = db._text(body.get("uid"))
@@ -91,11 +91,11 @@ def bill(body):
             if uid and b["uid"] == uid:
                 return b
         checked = db.check_billing(data, body)
-        return db.create_billing(data, checked, send_invoice(checked) if body.get("invoice") else None)
+        return db.create_billing(data, checked, send_invoice(checked))
 
 
 def invoice_later(ref, body):
-    """Vystaví fakturu k vyúčtování, které bylo zatím jen označené (nebo jehož fakturu ve Fakturách smazali)."""
+    """Vystaví fakturu k vyúčtování, které ji nemá (ze starších verzí, kde šlo záznamy jen označit)."""
     with db.open_data(write=True) as data:
         b = db.find_billing(data, ref)
         if b.get("invoice") and with_invoice_state([b])[0]["invoice_state"]["status"] != "deleted":
@@ -103,6 +103,22 @@ def invoice_later(ref, body):
         b.update(db.check_late_invoice(data, b, body))
         b["invoice"] = send_invoice(b)
         return b
+
+
+def unbill(ref):
+    """Vrátí záznamy vyúčtování mezi nevyfakturované a jeho fakturu smaže i ve Fakturách.
+    Zaplacenou fakturu Faktury nesmažou (je to příjem) a stornovaná v nich zůstane kvůli číselné řadě."""
+    with db.open_data(write=True) as data:
+        b = db.find_billing(data, ref)
+        state = with_invoice_state([b])[0]["invoice_state"] or {}
+        if b.get("invoice") and state.get("status") not in ("deleted", "cancelled"):
+            app = next((a for a in mejvos.apps(db.APP_ID) if a["id"] == b["invoice"]["app"]), None)
+            if app:  # Faktury odinstalované: není co mazat
+                if update.parse_version(app.get("version") or "0") < (1, 4, 0):
+                    raise ValueError(f"{app.get('name') or app['id']} neumí fakturu smazat, jsou moc staré. "
+                                     f"Otevři je, nech je aktualizovat a zkus to znovu.")
+                mejvos.call(app, "POST", "invoices/delete", {"app": db.APP_ID, "ref": b["uid"]})
+        return db.delete_billing(data, ref)
 
 
 def with_invoice_state(billings):
@@ -294,6 +310,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(bill(body), 201)
         if res == "billings" and method == "POST" and rid is not None and sub == "invoice":
             return self.send_json(with_invoice_state([invoice_later(rid, body)])[0])
+        if res == "billings" and method == "DELETE" and rid is not None and sub is None:
+            return self.send_json(unbill(rid))
         if res == "export" and rid == "csv" and method == "GET":
             with db.open_data() as data:
                 text = db.entries_csv(data, filter_entries(data, query))
@@ -360,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
                 return db.list_entries(data)
             if method == "POST" and rid is None:
                 return db.save_entry(data, body), 201, None
+            if method == "POST" and rid == "delete":
+                return db.delete_entries(data, body.get("entry_ids"))
             if isinstance(rid, int):
                 if method == "GET":
                     return db.get_entry(data, rid)
@@ -386,8 +406,6 @@ class Handler(BaseHTTPRequestHandler):
                 return db.billing_draft(data, rid)
             if rid is not None and method == "GET":
                 return db.find_billing(data, rid)
-            if rid is not None and method == "DELETE":
-                return db.delete_billing(data, rid)
 
         elif res == "os" and rid == "contacts" and method == "GET":
             return [mejvos.contact(c) for c in data["clients"]]

@@ -6,6 +6,7 @@
 //   kde žijí i data a vlastní Python. Aktualizace pak mění jen tu složku, samotná aplikace zůstává.
 // Odkazy hodinovka://cesta (třeba z Faktur) otevřou okno na stránce #/cesta.
 import AppKit
+import QuartzCore
 import WebKit
 
 /// Složka s kódem a daty Hodinovky.
@@ -73,6 +74,32 @@ func startServer(folder: URL) -> String? {
         return "Server se nepodařilo spustit. \(detail)"
     }
     return nil
+}
+
+/// Stopky do horní lišty s ručičkou na dané sekundě. Je to šablona, takže ji macOS obarví podle lišty.
+func stopwatchImage(second: Int) -> NSImage {
+    let image = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { _ in
+        NSColor.black.set()
+        let center = NSPoint(x: 8, y: 7.25)
+        let radius: CGFloat = 6
+        let dial = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        dial.lineWidth = 1.5
+        dial.stroke()
+        NSBezierPath(rect: NSRect(x: 7.4, y: 13, width: 1.2, height: 1.5)).fill()  // korunka
+        NSBezierPath(roundedRect: NSRect(x: 6.3, y: 14.2, width: 3.4, height: 1.5), xRadius: 0.7, yRadius: 0.7).fill()
+        let angle = CGFloat.pi / 2 - CGFloat(second) / 60 * 2 * CGFloat.pi
+        let hand = NSBezierPath()
+        hand.move(to: center)
+        hand.line(to: NSPoint(x: center.x + cos(angle) * (radius - 1.8), y: center.y + sin(angle) * (radius - 1.8)))
+        hand.lineWidth = 1.4
+        hand.lineCapStyle = .round
+        hand.stroke()
+        NSBezierPath(ovalIn: NSRect(x: center.x - 1.1, y: center.y - 1.1, width: 2.2, height: 2.2)).fill()
+        return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = "Hodinovka – časovač běží"
+    return image
 }
 
 /// Co je v okně vidět, než naběhne server. Text se ukáže, až když spuštění trvá déle.
@@ -251,29 +278,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             button.imagePosition = .imageLeading
             button.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             button.toolTip = "Hodinovka"
+            button.wantsLayer = true  // kvůli jemnému prolnutí při každé sekundě (viz updateStatusItem)
         }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateStatusItem() }
-        RunLoop.main.add(timer, forMode: .common)
-        ticker = timer
         updateStatusItem()
     }
 
-    /// V liště: ikona stopek a u běžícího časovače odpracovaný čas (hodiny:minuty).
-    func updateStatusItem() {
+    /// Tiká jen při běžícím časovači, a to těsně po každé celé sekundě od jeho spuštění, ať čas v liště
+    /// poskakuje pravidelně a nepřeskočí sekundu.
+    func restartTicker() {
+        ticker?.invalidate()
+        ticker = nil
+        guard let start = timerStart else { return }
+        let elapsed = Date().timeIntervalSince(start)
+        let first = start.addingTimeInterval(max(0, elapsed).rounded(.down) + 1.02)
+        let timer = Timer(fire: first, interval: 1, repeats: true) { [weak self] _ in self?.updateStatusItem(animated: true) }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        ticker = timer
+    }
+
+    /// V liště: stopky, a když časovač běží, i odpracovaný čas se sekundami. Ručička stopek ukazuje
+    /// sekundy a každá změna se krátce prolne, takže čas plynule ubíhá.
+    func updateStatusItem(animated: Bool = false) {
         guard let button = statusItem?.button else { return }
-        let symbol = timerStart == nil ? "stopwatch" : "stopwatch.fill"
-        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Hodinovka") {
-            image.isTemplate = true
-            button.image = image
+        if animated, let layer = button.layer {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.25
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(fade, forKey: "tick")
         }
         if let start = timerStart {
             let seconds = max(0, Int(Date().timeIntervalSince(start)))
-            button.title = String(format: " %d:%02d", seconds / 3600, (seconds % 3600) / 60)
+            button.image = stopwatchImage(second: seconds % 60)
+            button.title = String(format: " %d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
         } else {
-            button.title = button.image == nil ? "Hodinovka" : ""
+            let image = NSImage(systemSymbolName: "stopwatch", accessibilityDescription: "Hodinovka")
+            image?.isTemplate = true
+            button.image = image
+            button.title = image == nil ? "Hodinovka" : ""
         }
     }
 
@@ -302,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Zprávy ze stránky (app.js, tellNative): běží časovač, od kdy a na čem.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any] else { return }
+        let wasStart = timerStart
         if (body["running"] as? Bool) == true, let start = body["start"] as? Double {
             timerStart = Date(timeIntervalSince1970: start / 1000)
             let parts = [body["title"] as? String ?? "", body["project"] as? String ?? ""]
@@ -310,7 +357,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             timerStart = nil
             timerTitle = ""
         }
-        updateStatusItem()
+        if timerStart != wasStart {
+            restartTicker()
+        }
+        updateStatusItem(animated: (timerStart == nil) != (wasStart == nil))
     }
 
     // ---------- navigace ----------

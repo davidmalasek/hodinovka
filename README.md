@@ -17,12 +17,12 @@
 
 ## Co umí
 
-- **Časovač na jedno kliknutí.** Napíšeš, na čem pracuješ (třeba „Přidávání reference na web“), vybereš projekt a spustíš. Druhým kliknutím ho zastavíš. Běží, i když okno zavřeš nebo Mac uspíš, a odpracovaný čas vidíš i v horní liště Macu.
+- **Časovač na jedno kliknutí.** Napíšeš, na čem pracuješ (třeba „Přidávání reference na web“), vybereš projekt a spustíš. Druhým kliknutím ho zastavíš. Běží, i když okno zavřeš nebo Mac uspíš, a odpracovaný čas ubíhá po sekundách i v horní liště Macu.
 - **Projekty a klienti.** Každý záznam patří k projektu a projekt ke klientovi. Klientovi stačí jméno, IČO a adresu doplníš, až bude potřeba (nebo je načteš z ARES).
 - **Hodinová sazba, nebo pevná cena.** U projektu nastavíš sazbu v Kč za hodinu, nebo pevnou cenu bez ohledu na počet hodin. U pevné ceny pak vidíš, kolik ti vychází na hodinu.
-- **Co je vyfakturované a co ne.** Záznamy označíš jako vyfakturované (po jednom, po dnech nebo celý projekt) a kdykoli je zase vrátíš.
-- **Faktura sama.** Vybrané záznamy vyfakturuješ a ve Fakturách se rovnou vytvoří faktura pro klienta i s položkami, hodinami, cenami a obdobím. Odběratele i položky můžeš před vystavením změnit, třeba když chce klient fakturu na jinou firmu.
-- **Stav faktury.** Hodinovka ukazuje, jestli je faktura zaplacená, po splatnosti nebo stornovaná. Když ji ve Fakturách smažeš, nabídne vrátit čas mezi nevyfakturovaný.
+- **Co je vyfakturované a co ne.** Záznamy vybereš (po jednom, po dnech nebo celý projekt) a vyfakturuješ. Vybrané záznamy jde i najednou smazat.
+- **Faktura sama.** Ve Fakturách se rovnou vytvoří faktura pro klienta i s položkami, hodinami, cenami a obdobím. Položka řekne, na čem se dělalo (třeba „Web kavárny – Úprava menu, Reference“). Odběratele i položky můžeš před vystavením změnit, třeba když chce klient fakturu na jinou firmu.
+- **Stav faktury.** Hodinovka ukazuje, jestli je faktura zaplacená, po splatnosti nebo stornovaná.
 - **Přehled bez přehlcení:** odpracované hodiny za týden, měsíc nebo rok, hodnota práce, co čeká na vyfakturování a na čem a pro koho jsi pracoval.
 - **Výkaz práce v CSV** pro klienta nebo Excel, za projekt, období i konkrétní fakturu.
 - **Ruční záznamy** pro chvíle, kdy jsi zapomněl časovač zapnout, a úprava kteréhokoli záznamu kliknutím.
@@ -40,9 +40,9 @@ Hodinovka a [Faktury](https://github.com/davidmalasek/faktury) patří do jednoh
 
 - **Klienti se sdílí.** Kontakt z Faktur se ti nabídne při zakládání projektu v Hodinovce a klient z Hodinovky se nabídne u nové faktury. Jakmile ho jednou použiješ, zůstanou propojené a změny údajů (třeba doplněné IČO) se přenesou do druhé aplikace.
 - **Vyfakturovat** vytvoří fakturu ve Fakturách. Číslo, splatnost a tvoje údaje doplní Faktury, PDF s QR platbou se vytvoří při jejím otevření. Tlačítko „Otevřít ve Fakturách“ tě na ni přenese.
-- **Jen označit** fakturu nevytvoří. Když ji k označeným záznamům budeš chtít později, otevři vyúčtování (Přehled → Vyúčtování) a dej Vytvořit fakturu.
+- **Oběma směry.** Když v Hodinovce vrátíš vyúčtování mezi nevyfakturované, faktura se ve Fakturách smaže. A když fakturu smažeš ve Fakturách (i víc najednou), záznamy se v Hodinovce samy vrátí mezi nevyfakturované. Zaplacená faktura se sama nesmaže (je to příjem) a stornovaná zůstane ve Fakturách kvůli číselné řadě.
 - **Všechno hned.** Otevřené okno se samo obnoví, když se něco změní v druhé aplikaci: faktura se ve Fakturách ukáže do pár vteřin a zaplacení uvidíš v Hodinovce, aniž bys cokoli načítal znovu.
-- **Když Faktury na Macu nejsou,** Hodinovka je nabídne nainstalovat jedním kliknutím. Stáhnou se z GitHubu do Aplikací a hned se propojí. Bez nich můžeš záznamy jen označovat jako vyfakturované.
+- **Když Faktury na Macu nejsou,** Hodinovka je nabídne nainstalovat jedním kliknutím. Stáhnou se z GitHubu do Aplikací a hned se propojí.
 - Faktury neběží? Hodinovka si je na pozadí spustí sama.
 
 Je jedno, kterou aplikaci si stáhneš dřív. Obě v sobě nesou to, co k propojení potřebují. Jak to funguje uvnitř, popisuje [docs/mejvos.md](docs/mejvos.md).
@@ -81,7 +81,7 @@ Výjimečně se změní i okno aplikace. Pak se stáhne nová Hodinovka.app a ap
 - **Pevná cena:** vyfakturuje se jednou, bez ohledu na čas. Další záznamy na stejném projektu se pak nabídnou za 0 Kč (třeba když fakturuješ další část, cenu přepíšeš).
 - **Položky:** jedna za projekt, nebo jedna za každý popis práce. Obojí jde přepnout přímo u fakturace a položky ručně upravit, přidat nebo smazat.
 - **Odběratel:** výchozí je klient projektu. Můžeš vybrat jiný kontakt z Hodinovky nebo z Faktur, nebo zadat nového (s načtením z ARES). Faktura se pak vystaví na něj a ve Fakturách se uloží do kontaktů.
-- **Bez Faktur:** „Jen označit“ si zapamatuje, co a za kolik jsi vyúčtoval, ale fakturu nevytvoří. Vytvoříš ji kdykoli později v detailu vyúčtování (i znovu, když fakturu ve Fakturách smažeš).
+- **Vyúčtování bez faktury** ze starších verzí (kdy šlo záznamy jen označit) najdeš v Přehledu → Vyúčtování. Fakturu k nim vytvoříš tlačítkem Vytvořit fakturu.
 
 Stejné záznamy nejde vyfakturovat dvakrát, a když se během vystavování ztratí spojení, opakované kliknutí fakturu nezdvojí.
 

@@ -146,15 +146,28 @@ class DataTests(TempData):
             ids = [a["id"], b["id"], c["id"], d["id"]]
             p = db.billing_preview(data, ids)
             self.assertEqual([(i["description"], i["quantity"], i["price"]) for i in p["items"]],
-                             [("Web", 2.75, 800.0), ("Logo", 1.0, 5000.0)])
+                             [("Web – Úprava menu, Reference", 2.75, 800.0), ("Logo – Návrh", 1.0, 5000.0)])
             self.assertEqual(p["total"], 7200.0)
             self.assertEqual(p["customer"]["name"], "Kavárna")
             self.assertTrue(p["note"].startswith("Období: "))
             p = db.billing_preview(data, ids, "description")
             self.assertEqual([(i["description"], i["quantity"]) for i in p["items"]],
-                             [("Web: Úprava menu", 2.0), ("Web: Reference", 0.75), ("Logo", 1.0)])
+                             [("Web: Úprava menu", 2.0), ("Web: Reference", 0.75), ("Logo – Návrh", 1.0)])
             db.save_settings(data, {"rounding": 60})
             self.assertEqual(db.billing_preview(data, [c["id"]])["items"][0]["quantity"], 1.0)
+
+    def test_item_text_says_what_was_done(self):
+        with db.open_data(True) as data:
+            _, web = self.setup_project(data)
+            quiet = self.entry(data, web, at(-3), 30, "")
+            self.assertEqual(db.billing_preview(data, [quiet["id"]])["items"][0]["description"], "Práce na projektu Web")
+            many = [self.entry(data, web, at(-2, 8, i), 1, f"Úkol číslo {i:02d}") for i in range(20)]
+            text = db.billing_preview(data, [quiet["id"]] + [e["id"] for e in many])["items"][0]["description"]
+            self.assertTrue(text.startswith("Web – Úkol číslo 00, Úkol číslo 01, "))
+            self.assertTrue(text.endswith(" a další"))
+            self.assertLessEqual(len(text), db.ITEM_TEXT + len(" a další"))
+            loose = self.entry(data, None, at(-1, 15), 60, "Konzultace")
+            self.assertEqual(db.billing_preview(data, [loose["id"]])["items"][0]["description"], "Práce – Konzultace")
 
     def test_preview_warnings(self):
         with db.open_data(True) as data:
@@ -185,7 +198,7 @@ class DataTests(TempData):
             self.assertEqual(p["items"][0]["price"], 0.0)
             self.assertIn("už je vyfakturovaná", p["warnings"][0])
             with self.assertRaisesRegex(ValueError, "0 Kč"):
-                db.check_billing(data, {"entry_ids": [later["id"]], "invoice": True})
+                db.check_billing(data, {"entry_ids": [later["id"]]})
 
     def test_billing_marks_and_unmarks_entries(self):
         with db.open_data(True) as data:
@@ -208,16 +221,29 @@ class DataTests(TempData):
             _, web = self.setup_project(data)
             e = self.entry(data, web)
             checked = db.check_billing(data, {
-                "entry_ids": [e["id"]], "invoice": True,
+                "entry_ids": [e["id"]],
                 "customer": {"name": "Holding a.s.", "ico": "12345678"},
                 "items": [{"description": "Záloha", "quantity": "1", "price": "2 500,50"}, {"description": "", "price": ""}],
             })
             self.assertEqual((checked["customer"]["name"], checked["total"], len(checked["items"])), ("Holding a.s.", 2500.5, 1))
             with self.assertRaisesRegex(ValueError, "odběratele"):
-                db.check_billing(data, {"entry_ids": [e["id"]], "invoice": True, "customer": {"name": ""},
+                db.check_billing(data, {"entry_ids": [e["id"]], "customer": {"name": ""},
                                         "items": [{"description": "x", "price": 1}]})
             with self.assertRaisesRegex(ValueError, "není číslo"):
                 db.check_billing(data, {"entry_ids": [e["id"]], "items": [{"description": "x", "price": "abc"}]})
+
+    def test_delete_many_entries(self):
+        with db.open_data(True) as data:
+            _, web = self.setup_project(data)
+            a, b = self.entry(data, web), self.entry(data, web, at(-2))
+        with self.assertRaises(LookupError), db.open_data(True) as data:
+            db.delete_entries(data, [a["id"], 999])
+        self.assertEqual(len(self.stored()["entries"]), 2)  # buď všechny, nebo žádný
+        with self.assertRaisesRegex(ValueError, "Nevybral"), db.open_data(True) as data:
+            db.delete_entries(data, [])
+        with db.open_data(True) as data:
+            self.assertEqual(db.delete_entries(data, [a["id"], str(b["id"]), a["id"]]), {"deleted": 2})
+            self.assertEqual(data["entries"], [])
 
     def test_delete_rules(self):
         with db.open_data(True) as data:
@@ -271,12 +297,12 @@ class DataTests(TempData):
 # ---------- MejvOS ----------
 
 class MejvosTests(TempData):
-    def manifest(self, app_id, api="http://127.0.0.1:1/api/os", provides=("contacts",)):
+    def manifest(self, app_id, api="http://127.0.0.1:1/api/os", provides=("contacts",), version="1.4.0"):
         launcher = Path(self.tmp.name) / app_id / "spustit.sh"
         launcher.parent.mkdir(exist_ok=True)
         launcher.write_text("#!/bin/bash\nexit 0\n")
         mejvos._write_json(mejvos.HOME / "apps" / f"{app_id}.json", {
-            "id": app_id, "name": app_id.capitalize(), "api": api, "provides": list(provides),
+            "id": app_id, "name": app_id.capitalize(), "version": version, "api": api, "provides": list(provides),
             "launch": {"command": ["/bin/bash", str(launcher)]}, "scheme": app_id})
         return launcher
 
@@ -378,10 +404,10 @@ class MejvosTests(TempData):
 
 
 class FakeFaktury:
-    """Zjednodušené Faktury: přijmou fakturu a zveřejní její stav jako ty skutečné."""
+    """Zjednodušené Faktury: přijmou nebo smažou fakturu a zveřejní stav jako ty skutečné."""
 
     def __init__(self, home=None):
-        self.invoices, self.fail_with, self.home = [], None, home
+        self.invoices, self.deleted, self.fail_with, self.home = [], [], None, home
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -403,6 +429,13 @@ class FakeFaktury:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if fake.fail_with:
                     return self.reply(400, {"error": fake.fail_with})
+                if self.path.endswith("/invoices/delete"):
+                    inv = next((i for i in fake.invoices if i["ref"] == body["ref"]), None)
+                    if inv and inv["status"] == "paid":
+                        return self.reply(400, {"error": f"Faktura {inv['number']} je zaplacená, a tak se sama nesmaže."})
+                    if inv and inv["status"] == "issued":
+                        fake.delete(inv["ref"])
+                    return self.reply(200, {"deleted": bool(inv and inv["status"] == "issued")})
                 ref = body["source"]["ref"]
                 inv = next((i for i in fake.invoices if i["ref"] == ref), None)
                 if not inv:
@@ -417,10 +450,16 @@ class FakeFaktury:
         self.api = f"http://127.0.0.1:{self.httpd.server_address[1]}/api/os"
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
+    def delete(self, ref):
+        """Smaže fakturu jako ve Fakturách: zmizí ze seznamu a ohlásí se jako smazaná."""
+        self.invoices = [i for i in self.invoices if i["ref"] != ref]
+        self.deleted.append({"app": "hodinovka", "ref": ref, "deleted_at": mejvos.now()})
+        self.publish()
+
     def publish(self):
         if self.home:
             mejvos._write_json(self.home / "invoices/faktury.json", {"ready": True, "items": [
-                {k: v for k, v in i.items() if k != "body"} for i in self.invoices]})
+                {k: v for k, v in i.items() if k != "body"} for i in self.invoices], "deleted": self.deleted})
 
     def close(self):
         self.httpd.shutdown()
@@ -557,19 +596,25 @@ class ServerTests(TempData):
         self.assertIsNone(self.call("GET", "/api/timer")[1]["entry"])
 
     def test_billing_without_faktury(self):
-        p, ids = self.make_entries()
+        _, ids = self.make_entries()
         status, preview = self.call("POST", "/api/billings/preview", {"entry_ids": ids})
         self.assertEqual((status, preview["total"]), (200, 3000.0))
-        status, body = self.call("POST", "/api/billings", {"uid": "x1", "entry_ids": ids, "invoice": True, **preview})
+        status, body = self.call("POST", "/api/billings", {"uid": "x1", "entry_ids": ids, **preview})
         self.assertEqual(status, 400)
         self.assertIn("nejsou Faktury", body["error"])
         self.assertTrue(all(e["billing_id"] is None for e in self.stored()["entries"]))  # nic se neoznačilo
-        status, b = self.call("POST", "/api/billings", {"uid": "x1", "entry_ids": ids})
-        self.assertEqual((status, b["total"], b["invoice"]), (201, 3000.0, None))
-        self.assertEqual(self.call("POST", "/api/billings", {"uid": "x1", "entry_ids": ids})[1]["id"], b["id"])  # opakování
-        self.assertEqual(self.call("GET", f"/api/projects/{p['id']}")[1]["billed_amount"], 3000.0)
-        self.assertEqual(self.call("GET", "/api/billings/x1")[1]["invoice_state"], None)
-        self.assertEqual(self.call("DELETE", "/api/billings/x1")[1], {"returned": 2})
+        self.assertEqual(self.stored()["billings"], [])
+
+    def mark_only(self, uid, ids):
+        """Vyúčtování bez faktury, jaké šlo udělat ve starších verzích („Jen označit“)."""
+        with db.open_data(True) as data:
+            return db.create_billing(data, db.check_billing(data, {"uid": uid, "entry_ids": ids}))
+
+    def test_bulk_delete_entries(self):
+        _, ids = self.make_entries()
+        self.assertEqual(self.call("POST", "/api/entries/delete", {"entry_ids": ids}), (200, {"deleted": 2}))
+        self.assertEqual(self.stored()["entries"], [])
+        self.assertEqual(self.call("POST", "/api/entries/delete", {"entry_ids": [1]})[0], 404)
 
     def test_billing_creates_invoice_in_faktury(self):
         fake = FakeFaktury(mejvos.HOME)
@@ -577,7 +622,7 @@ class ServerTests(TempData):
         MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
         _, ids = self.make_entries()
         _, preview = self.call("POST", "/api/billings/preview", {"entry_ids": ids})
-        body = {"uid": "u-1", "entry_ids": ids, "invoice": True, "items": preview["items"],
+        body = {"uid": "u-1", "entry_ids": ids, "items": preview["items"],
                 "customer": {**preview["customer"], "name": "Holding a.s."}, "note": preview["note"]}
         status, b = self.call("POST", "/api/billings", body)
         self.assertEqual((status, b["invoice"]["number"], b["invoice"]["scheme"]), (201, "20260001", "faktury"))
@@ -600,7 +645,7 @@ class ServerTests(TempData):
 
     def test_invoice_later_for_marked_entries(self):
         _, ids = self.make_entries()
-        self.call("POST", "/api/billings", {"uid": "m-1", "entry_ids": ids})  # jen označit
+        self.mark_only("m-1", ids)
         status, draft = self.call("GET", "/api/billings/m-1/draft")
         self.assertEqual((status, draft["billing"], draft["entry_ids"], draft["total"]), (200, "m-1", ids, 3000.0))
         self.assertEqual(draft["customer"]["name"], "Kavárna")
@@ -621,10 +666,63 @@ class ServerTests(TempData):
         self.assertEqual(len(fake.invoices), 1)
         self.assertTrue(all(e["billing_id"] == b["id"] for e in self.stored()["entries"]))
 
-        fake.invoices.clear()  # ve Fakturách ji smazali – jde vystavit znovu
+        fake.invoices.clear()  # ve Fakturách chybí (smazaná dřív, než to Faktury hlásily) – jde vystavit znovu
         fake.publish()
         status, again = self.call("POST", "/api/billings/m-1/invoice", {})
         self.assertEqual((status, again["invoice_state"]["status"], fake.invoices[0]["total"]), (200, "issued", 3600.0))
+        self.assertEqual(self.call("DELETE", "/api/billings/m-1")[1], {"returned": 2})
+        self.assertEqual(fake.invoices, [])  # vrácením mezi nevyfakturované zmizela i faktura
+
+    def billed(self, uid, ids):
+        status, b = self.call("POST", "/api/billings", {"uid": uid, "entry_ids": ids})
+        self.assertEqual((status, b["invoice"]["app"]), (201, "faktury"))
+
+    def test_unbilling_deletes_invoice_in_faktury(self):
+        fake = FakeFaktury(mejvos.HOME)
+        self.addCleanup(fake.close)
+        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        _, ids = self.make_entries()
+        self.billed("u-1", ids)
+        fake.invoices[0]["status"] = "paid"
+        fake.publish()
+        status, err = self.call("DELETE", "/api/billings/u-1")
+        self.assertEqual(status, 400)
+        self.assertIn("zaplacená", err["error"])  # zaplacenou fakturu Hodinovka nesmaže
+        self.assertEqual(len(self.stored()["billings"]), 1)
+        fake.invoices[0]["status"] = "cancelled"
+        fake.publish()
+        self.assertEqual(self.call("DELETE", "/api/billings/u-1"), (200, {"returned": 2}))
+        self.assertEqual(len(fake.invoices), 1)  # stornovaná zůstane v číselné řadě
+        self.billed("u-2", ids)
+        self.assertEqual(self.call("DELETE", "/api/billings/u-2"), (200, {"returned": 2}))
+        self.assertEqual([i["ref"] for i in fake.invoices], ["u-1"])
+        self.assertTrue(all(e["billing_id"] is None for e in self.stored()["entries"]))
+
+    def test_unbilling_needs_new_faktury(self):
+        fake = FakeFaktury(mejvos.HOME)
+        self.addCleanup(fake.close)
+        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"], version="1.3.0")
+        self.billed("u-1", self.make_entries()[1])
+        status, err = self.call("DELETE", "/api/billings/u-1")
+        self.assertEqual(status, 400)
+        self.assertIn("aktualizovat", err["error"])
+        self.assertEqual(len(fake.invoices), 1)
+
+    def test_invoice_deleted_in_faktury_returns_entries(self):
+        fake = FakeFaktury(mejvos.HOME)
+        self.addCleanup(fake.close)
+        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        _, ids = self.make_entries()
+        self.billed("u-1", ids[:1])
+        self.billed("u-2", ids[1:])
+        fake.invoices.clear()  # jen chybí (třeba přeinstalované Faktury): nic se neruší
+        fake.publish()
+        self.assertEqual(len(self.call("GET", "/api/billings")[1]), 2)
+        fake.delete("u-1")  # smazaná ve Fakturách
+        _, billings = self.call("GET", "/api/billings")
+        self.assertEqual([b["uid"] for b in billings], ["u-2"])
+        entries = self.stored()["entries"]
+        self.assertEqual([e["billing_id"] is None for e in entries], [True, False])
 
     def test_revision_follows_changes(self):
         _, first = self.call("GET", "/api/rev")
@@ -645,7 +743,7 @@ class ServerTests(TempData):
         self.addCleanup(fake.close)
         MejvosTests.manifest(self, "faktury", api=fake.api, provides=["invoices"])
         _, ids = self.make_entries()
-        status, body = self.call("POST", "/api/billings", {"uid": "u-2", "entry_ids": ids, "invoice": True})
+        status, body = self.call("POST", "/api/billings", {"uid": "u-2", "entry_ids": ids})
         self.assertEqual(status, 400)
         self.assertIn("Chybí položky", body["error"])
         self.assertEqual(self.stored()["billings"], [])

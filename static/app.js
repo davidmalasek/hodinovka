@@ -44,7 +44,7 @@ async function api(path, { method = 'GET', body } = {}) {
   }
   if (res.headers.get('X-Rev')) seenRev = res.headers.get('X-Rev'); // změnu udělala tahle stránka
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Chyba ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Chyba ${res.status}`), { status: res.status });
   return data;
 }
 
@@ -102,6 +102,13 @@ function weekStart(iso) {
 const hm = d => `${z2(d.getHours())}:${z2(d.getMinutes())}`;
 const secsOf = e => Math.max(0, ((e.end ? Date.parse(e.end) : Date.now()) - Date.parse(e.start)) / 1000);
 const sumSecs = list => list.reduce((s, e) => s + secsOf(e), 0);
+const dur = secs => Fmt.clock(secs, true); // délka práce i se sekundami, ať je vidět, že časovač běží
+/** Součet záznamů, který s běžícím časovačem přibývá každou sekundu (viz tick). */
+function liveSum(list, tag = 'b', attrs = '') {
+  const running = list.some(e => !e.end);
+  const base = sumSecs(list.filter(e => e.end));
+  return `<${tag} ${attrs}${running ? ` data-live-base="${base}"` : ''}>${dur(sumSecs(list))}</${tag}>`;
+}
 function parseNum(v) {
   const n = parseFloat(String(v ?? '').replace(/[\s ]/g, '').replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
@@ -275,11 +282,17 @@ function drawPill() {
 }
 
 function tick() {
-  const t = Fmt.clock(Timer.elapsed(), true);
+  const t = dur(Timer.elapsed());
   $$('[data-elapsed]').forEach(el => (el.textContent = Timer.entry ? t : '0:00:00'));
-  $$('[data-running-dur]').forEach(el => (el.textContent = Fmt.clock(Timer.elapsed())));
+  $$('[data-running-dur]').forEach(el => (el.textContent = t));
+  $$('[data-live-base]').forEach(el => (el.textContent = dur(Number(el.dataset.liveBase) + Timer.elapsed())));
 }
-setInterval(tick, 1000);
+// Tiká těsně po každé celé sekundě od spuštění časovače, ať čas poskakuje pravidelně a nepřeskočí sekundu.
+(function loop() {
+  tick();
+  const start = Timer.entry ? Date.parse(Timer.entry.start) : 0;
+  setTimeout(loop, 1000 - ((Date.now() - start) % 1000) + 20);
+})();
 
 /** Okno aplikace ukazuje běžící čas i v horní liště Macu. */
 function tellNative() {
@@ -296,7 +309,7 @@ window.hodinovka = {
   toggle: () => attempt(async () => {
     if (Timer.entry) {
       const stopped = await Timer.stop();
-      toast(`Zapsáno ${Fmt.clock(secsOf(stopped))}`);
+      toast(`Zapsáno ${dur(secsOf(stopped))}`);
     } else {
       await Timer.start({ project_id: lastProject() });
       toast('Časovač běží');
@@ -308,7 +321,7 @@ window.hodinovka = {
 
 $('#pill-stop').onclick = e => attempt(async () => {
   const stopped = await Timer.stop();
-  toast(`Zapsáno ${Fmt.clock(secsOf(stopped))}`);
+  toast(`Zapsáno ${dur(secsOf(stopped))}`);
   router(false);
 }, e.currentTarget);
 window.addEventListener('focus', () => Timer.refresh());
@@ -351,23 +364,25 @@ function entryDialog(entry, billing) {
   const form = $('form', dialog);
   const els = form.elements;
 
+  // Políčka mají jen minuty: když se čas nezměnil, zůstanou i sekundy, ať se délka uložením nezkrátí.
+  const kept = (orig, d) => (orig && Math.floor(Date.parse(orig) / 6e4) === Math.floor(d.getTime() / 6e4) ? new Date(orig) : d);
   const times = () => {
     const s = new Date(`${els.date.value}T${els.from.value}`);
-    if (running) return { start: s, end: null };
+    if (running) return { start: kept(entry.start, s), end: null };
     let e = new Date(`${els.end_date?.value || els.date.value}T${els.to.value}`);
     let nextDay = false;
     if (!els.end_date && e < s) {
       e = new Date(e.getTime() + 864e5);
       nextDay = true;
     }
-    return { start: s, end: e, nextDay };
+    return { start: kept(entry?.start, s), end: kept(entry?.end, e), nextDay };
   };
   const showDuration = () => {
     const t = times();
     if (Number.isNaN(t.start.getTime()) || (t.end && Number.isNaN(t.end.getTime()))) return ($('#duration', dialog).textContent = '');
     const secs = ((t.end || new Date()) - t.start) / 1000;
     $('#duration', dialog).textContent = secs < 0 ? 'Konec je dřív než začátek.'
-      : `Délka ${Fmt.clock(secs)}${t.nextDay ? ' · končí další den' : ''}${running ? ' (běží dál)' : ''}`;
+      : `Délka ${dur(secs)}${t.nextDay ? ' · končí další den' : ''}${running ? ' (běží dál)' : ''}`;
   };
   form.addEventListener('input', showDuration);
   showDuration();
@@ -430,7 +445,7 @@ function entryRow(e, billings, selectable) {
         <div class="e-meta">${projectTag(projectOf(e))}${billed}${e.end ? '' : '<span class="running-tag">Běží</span>'}<span class="show-sm muted">${range}</span></div>
       </td>
       <td class="e-range hide-sm">${range}</td>
-      <td class="num e-dur"${e.end ? '' : ' data-running-dur'}>${Fmt.clock(secsOf(e))}</td>
+      <td class="num e-dur"${e.end ? '' : ' data-running-dur'}>${dur(secsOf(e))}</td>
       <td class="e-act">${e.end ? `<button type="button" class="icon-btn" data-continue="${e.id}" title="Pokračovat" aria-label="Pokračovat v práci na ${esc(entryTitle(e))}">${PLAY}</button>` : ''}</td>
     </tr>`;
 }
@@ -459,7 +474,7 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
     <div class="bulkbar" hidden>
       <span class="count"></span>
       <button type="button" class="btn ghost" data-bulk="clear">Zrušit výběr</button>
-      <button type="button" class="btn" data-bulk="mark" title="Označí záznamy jako vyfakturované bez faktury">Jen označit</button>
+      <button type="button" class="btn ghost danger" data-bulk="delete">Smazat…</button>
       <button type="button" class="btn primary" data-bulk="bill">Vyfakturovat…</button>
     </div>`;
   const daysEl = $('[data-days]', el);
@@ -468,7 +483,7 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
 
   const updateBulk = () => {
     bar.hidden = selected.size === 0;
-    $('.count', bar).textContent = `${plural(selected.size, 'záznam', 'záznamy', 'záznamů')} · ${Fmt.clock(sumSecs(chosen()))}`;
+    $('.count', bar).textContent = `${plural(selected.size, 'záznam', 'záznamy', 'záznamů')} · ${dur(sumSecs(chosen()))}`;
     $$('tr[data-entry]', daysEl).forEach(tr => tr.classList.toggle('selected', selected.has(Number(tr.dataset.entry))));
     $$('[data-select-day]', daysEl).forEach(box => {
       const ids = $$('[data-select]', box.closest('.day')).map(b => Number(b.dataset.select));
@@ -485,7 +500,7 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
           <div class="day-head">
             ${list.some(isPickable) ? `<label title="Vybrat nevyfakturované"><input type="checkbox" data-select-day aria-label="Vybrat nevyfakturované záznamy: ${esc(dayLabel(day))}"></label>` : ''}
             <h2>${esc(dayLabel(day))}</h2>
-            <span class="total">${Fmt.clock(sumSecs(list))}</span>
+            ${liveSum(list, 'span', 'class="total"')}
           </div>
           <div class="table-card"><table class="list entries"><tbody>${list.map(e => entryRow(e, billings, true)).join('')}</tbody></table></div>
         </section>`).join('') + (days.length > shown ? '<div class="more"><button type="button" class="btn" data-more>Zobrazit starší</button></div>' : '')
@@ -531,8 +546,8 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
     if (act === 'clear') {
       selected.clear();
       draw();
-    } else if (act === 'mark') {
-      markBilled(chosen(), e.target.closest('button'));
+    } else if (act === 'delete') {
+      deleteEntries(chosen(), e.target.closest('button'));
     } else if (act === 'bill') {
       location.hash = `#/vyfakturovat?zaznamy=${[...selected].join(',')}`;
     }
@@ -545,12 +560,14 @@ function mountEntries(el, rows, billings, { empty = 'Zatím žádné záznamy.' 
   };
 }
 
-async function markBilled(list, button) {
-  if (!confirm(`Označit ${plural(list.length, 'záznam', 'záznamy', 'záznamů')} (${Fmt.clock(sumSecs(list))}) jako vyfakturované?\n\n` +
-    'Faktura se nevytvoří, záznamy se jen přesunou mezi vyfakturované. Fakturu ve Fakturách vytvoří tlačítko Vyfakturovat, nebo později detail vyúčtování.')) return;
+async function deleteEntries(list, button) {
+  const what = list.length === 1
+    ? `záznam${list[0].description ? ` „${list[0].description}“` : ''}`
+    : plural(list.length, 'záznam', 'záznamy', 'záznamů');
+  if (!confirm(`Smazat ${what} (${dur(sumSecs(list))})?\n\nSmazané záznamy nejdou vrátit.`)) return;
   await attempt(async () => {
-    await api('billings', { method: 'POST', body: { uid: newUid(), entry_ids: list.map(e => e.id), invoice: false } });
-    toast(`${plural(list.length, 'záznam označen', 'záznamy označeny', 'záznamů označeno')} jako vyfakturované`);
+    await api('entries/delete', { method: 'POST', body: { entry_ids: list.map(e => e.id) } });
+    toast(list.length === 1 ? 'Záznam smazán' : plural(list.length, 'záznam smazán', 'záznamy smazány', 'záznamů smazáno'));
     router(false);
   }, button);
 }
@@ -592,9 +609,9 @@ function renderTime(params, entries, billings) {
       <button type="button" class="play" id="t-toggle">${BIG_PLAY}${BIG_STOP}</button>
     </section>
     <div class="summary">
-      <span>Dnes <b>${Fmt.clock(sumSecs(entries.filter(e => dayOf(e.start) === today)))}</b></span>
-      <span>Tento týden <b>${Fmt.clock(sumSecs(entries.filter(e => dayOf(e.start) >= week)))}</b></span>
-      <a href="#/cas?stav=nevyfakturovane">Nevyfakturováno <b>${Fmt.clock(sumSecs(unbilled))}</b></a>
+      <span>Dnes ${liveSum(entries.filter(e => dayOf(e.start) === today))}</span>
+      <span>Tento týden ${liveSum(entries.filter(e => dayOf(e.start) >= week))}</span>
+      <a href="#/cas?stav=nevyfakturovane">Nevyfakturováno <b>${dur(sumSecs(unbilled))}</b></a>
     </div>
     <div class="toolbar">
       <div class="segmented" role="group" aria-label="Stav">${STATES.map(([k, label]) => `<button type="button" data-stav="${k}" aria-pressed="false">${label}</button>`).join('')}</div>
@@ -666,7 +683,7 @@ function renderTime(params, entries, billings) {
     if (Timer.entry) {
       await flush();
       const stopped = await Timer.stop();
-      toast(`Zapsáno ${Fmt.clock(secsOf(stopped))}`);
+      toast(`Zapsáno ${dur(secsOf(stopped))}`);
     } else {
       const pid = proj.value && proj.value !== 'new' ? Number(proj.value) : null;
       await Timer.start({ description: desc.value, project_id: pid });
@@ -854,7 +871,7 @@ async function viewDashboard(params) {
         </div>
       </div>
       <div class="kpis">
-        <div class="kpi"><div class="k">Odpracováno</div><div class="v">${Fmt.hours(total)}</div><div class="d">${Fmt.clock(total)} · ${plural(inPeriod.length, 'záznam', 'záznamy', 'záznamů')}</div></div>
+        <div class="kpi"><div class="k">Odpracováno</div><div class="v">${Fmt.hours(total)}</div><div class="d">${dur(total)} · ${plural(inPeriod.length, 'záznam', 'záznamy', 'záznamů')}</div></div>
         <div class="kpi"><div class="k">Hodnota práce</div><div class="v">${Fmt.money0(value)}</div><div class="d">podle hodinových sazeb${hasFixed ? ', bez pevných cen' : ''}</div></div>
         <a class="kpi" href="#/cas?stav=nevyfakturovane"><div class="k">Nevyfakturováno</div><div class="v">${Fmt.money0(unbilledAmount)}</div><div class="d">${Fmt.hours(unbilledSecs)} práce celkem</div></a>
         <a class="kpi" href="#/vyuctovani"><div class="k">Vyfakturováno</div><div class="v">${Fmt.money0(billedIn.reduce((s, b) => s + b.total, 0))}</div><div class="d">${plural(billedIn.length, 'vyúčtování', 'vyúčtování', 'vyúčtování')} za období</div></a>
@@ -886,7 +903,7 @@ async function viewDashboard(params) {
 // ---------- vyúčtování ----------
 
 function billingStatus(b) {
-  if (!b.invoice) return ['manual', 'Označeno ručně'];
+  if (!b.invoice) return ['manual', 'Bez faktury'];
   const s = b.invoice_state?.status;
   if (s === 'paid') return ['paid', 'Zaplaceno'];
   if (s === 'cancelled') return ['cancelled', 'Stornováno'];
@@ -945,7 +962,12 @@ async function viewBillings() {
 }
 
 async function viewBilling(params, ref) {
-  const [b, entries] = await Promise.all([api('billings/' + encodeURIComponent(ref)), api('entries'), loadRefs()]);
+  const [b, entries] = await Promise.all([
+    api('billings/' + encodeURIComponent(ref)).catch(e => {
+      // třeba když jeho fakturu mezitím smazali ve Fakturách
+      throw e.status === 404 ? new Error('Vyúčtování už neexistuje, jeho záznamy jsou zase mezi nevyfakturovanými.') : e;
+    }),
+    api('entries'), loadRefs()]);
   const mine = entries.filter(e => e.billing_id === b.id);
   return () => {
     setTitle(billingTitle(b));
@@ -962,7 +984,7 @@ async function viewBilling(params, ref) {
             : `<a class="btn primary" href="#/vyfakturovat?vyuctovani=${esc(b.uid)}">Vytvořit fakturu…</a>`}
         </div>
       </div>
-      ${state === 'deleted' ? '<div class="notice bad">Faktura byla ve Fakturách smazána, záznamy jsou ale pořád označené jako vyfakturované. Fakturu můžeš vytvořit znovu, nebo záznamy vrátit mezi nevyfakturované.</div>' : ''}
+      ${state === 'deleted' ? '<div class="notice bad">Faktura ve Fakturách chybí, záznamy jsou ale pořád označené jako vyfakturované. Fakturu můžeš vytvořit znovu, nebo záznamy vrátit mezi nevyfakturované.</div>' : ''}
       ${state === 'cancelled' ? '<div class="notice">Faktura je ve Fakturách stornovaná. Když chceš práci vyfakturovat znovu, vrať záznamy mezi nevyfakturované.</div>' : ''}
       <div class="detail">
         <div>
@@ -970,14 +992,16 @@ async function viewBilling(params, ref) {
             <dl class="facts">
               <dt>Částka</dt><dd class="big">${Fmt.money(b.total)}</dd>
               ${c ? `<dt>Odběratel</dt><dd>${esc(c.name)}<div class="muted">${[...addressLines(c), c.ico && `IČO ${c.ico}`].filter(Boolean).map(esc).join('<br>')}</div></dd>` : ''}
-              <dt>Odpracováno</dt><dd>${Fmt.hours(b.seconds)} <span class="muted">(${Fmt.clock(b.seconds)})</span></dd>
+              <dt>Odpracováno</dt><dd>${Fmt.hours(b.seconds)} <span class="muted">(${dur(b.seconds)})</span></dd>
               <dt>Období</dt><dd>${b.period?.[0] === b.period?.[1] ? Fmt.date(b.period?.[0]) : `${Fmt.date(b.period?.[0])} – ${Fmt.date(b.period?.[1])}`}</dd>
-              <dt>${b.invoice ? 'Vystaveno' : 'Označeno'}</dt><dd>${Fmt.date(b.created_at)}</dd>
+              <dt>${b.invoice ? 'Vystaveno' : 'Vyúčtováno'}</dt><dd>${Fmt.date(b.created_at)}</dd>
               ${b.invoice_state?.paid_date ? `<dt>Zaplaceno</dt><dd>${Fmt.date(b.invoice_state.paid_date)}</dd>` : ''}
             </dl>
           </div>
           <div class="side-actions">
-            <button type="button" class="btn ghost danger" id="undo">Vrátit mezi nevyfakturované…</button>
+            ${state === 'paid'
+              ? '<p class="hint" style="margin:0 4px">Zaplacenou fakturu jde zrušit jen ve Fakturách. Když ji tam smažeš, záznamy se vrátí mezi nevyfakturované samy.</p>'
+              : '<button type="button" class="btn ghost danger" id="undo">Vrátit mezi nevyfakturované…</button>'}
           </div>
         </div>
         <div>
@@ -993,11 +1017,15 @@ async function viewBilling(params, ref) {
         </div>
       </div>`;
     mountEntries($('#entries'), mine, billingMap([b]), { empty: 'Záznamy tohoto vyúčtování byly smazané.' });
-    $('#undo').onclick = e => attempt(async () => {
-      const extra = b.invoice && !['deleted', 'cancelled'].includes(state) ? `\n\nFaktura ${b.invoice_state?.number || b.invoice.number} ve Fakturách zůstane – když platit nemá, stornuj ji tam.` : '';
+    const undo = $('#undo');
+    if (undo) undo.onclick = e => attempt(async () => {
+      const number = b.invoice && (b.invoice_state?.number || b.invoice.number);
+      const deletes = b.invoice && !['deleted', 'cancelled'].includes(state); // faktura se smaže i ve Fakturách
+      const extra = deletes ? `\n\nFaktura ${number} se ve Fakturách smaže.`
+        : state === 'cancelled' ? `\n\nStornovaná faktura ${number} ve Fakturách zůstane.` : '';
       if (!confirm(`Vrátit ${plural(mine.length, 'záznam', 'záznamy', 'záznamů')} mezi nevyfakturované?${extra}`)) return;
       await api('billings/' + encodeURIComponent(b.uid), { method: 'DELETE' });
-      toast('Záznamy jsou zase nevyfakturované');
+      toast(deletes ? 'Záznamy jsou zase nevyfakturované a faktura je smazaná' : 'Záznamy jsou zase nevyfakturované');
       location.hash = '#/cas?stav=nevyfakturovane';
     }, e.currentTarget);
   };
@@ -1006,7 +1034,7 @@ async function viewBilling(params, ref) {
 // ---------- vyfakturovat ----------
 
 async function viewBill(params) {
-  // ?vyuctovani=<uid> = faktura k záznamům, které už jsou jen označené jako vyfakturované
+  // ?vyuctovani=<uid> = faktura k vyúčtování bez faktury (ze starších verzí, kde šlo záznamy jen označit)
   const later = params.get('vyuctovani');
   const ids = (params.get('zaznamy') || '').split(',').map(Number).filter(Boolean);
   const [preview, offered, peers] = await Promise.all([
@@ -1020,7 +1048,7 @@ function renderBill(ids, preview, offered, peers) {
   setTitle('Vyfakturovat');
   const faktury = peers.apps.find(a => a.id === 'faktury');
   const canInvoice = faktury && faktury.state !== 'missing';
-  const later = preview.billing; // záznamy už jsou označené, faktura se k nim vystaví dodatečně
+  const later = preview.billing; // záznamy už jsou vyúčtované, faktura se k nim vystaví dodatečně
   const state = {
     uid: later || newUid(),
     customer: preview.customer,
@@ -1041,12 +1069,12 @@ function renderBill(ids, preview, offered, peers) {
     <div class="page-head">
       <div>
         <h1>${later ? 'Vytvořit fakturu' : 'Vyfakturovat'}</h1>
-        <p class="subtitle">${plural(ids.length, 'záznam', 'záznamy', 'záznamů')} · ${Fmt.hours(preview.seconds)} (${Fmt.clock(preview.seconds)}) · ${esc(preview.note.replace('Období: ', ''))}</p>
+        <p class="subtitle">${plural(ids.length, 'záznam', 'záznamy', 'záznamů')} · ${Fmt.hours(preview.seconds)} (${dur(preview.seconds)}) · ${esc(preview.note.replace('Období: ', ''))}</p>
       </div>
     </div>
     ${!faktury || faktury.state === 'missing' ? `
       <div class="notice info" style="display:flex;gap:8px 16px;align-items:center;justify-content:space-between;flex-wrap:wrap">
-        <span>Na tomhle Macu nejsou Faktury. Nainstalují se samy a hned se s Hodinovkou propojí.${later ? '' : ' Jinak záznamy jen označ jako vyfakturované.'}</span>
+        <span>Fakturu vystaví Faktury, a ty na tomhle Macu nejsou. Nainstalují se samy a hned se s Hodinovkou propojí.</span>
         <button type="button" class="btn primary" id="install">Nainstalovat Faktury</button>
       </div>` : ''}
     ${faktury && faktury.ready === false ? '<div class="notice">Ve Fakturách chybí tvoje údaje nebo číslo účtu, takže nebudou na faktuře. <a href="faktury://nastaveni">Doplnit v Nastavení Faktur</a></div>' : ''}
@@ -1079,7 +1107,6 @@ function renderBill(ids, preview, offered, peers) {
       </section>
       <div class="form-actions">
         <a class="btn" href="${back}">Zrušit</a>
-        ${later ? '' : '<button type="button" class="btn" id="mark-only">Jen označit jako vyfakturované</button>'}
         <button type="submit" class="btn primary" ${canInvoice ? '' : 'disabled'}>Vytvořit fakturu ve Fakturách</button>
       </div>
     </form>`;
@@ -1200,10 +1227,9 @@ function renderBill(ids, preview, offered, peers) {
     }
   });
 
-  const body = invoice => ({
+  const body = () => ({
     uid: state.uid,
     entry_ids: ids,
-    invoice,
     grouping: state.grouping,
     client_id: state.clientId,
     customer: state.customer,
@@ -1219,19 +1245,13 @@ function renderBill(ids, preview, offered, peers) {
         throw new Error('Vyber nebo vyplň odběratele.');
       }
       const b = later
-        ? await api(`billings/${encodeURIComponent(later)}/invoice`, { method: 'POST', body: body(true) })
-        : await api('billings', { method: 'POST', body: body(true) });
+        ? await api(`billings/${encodeURIComponent(later)}/invoice`, { method: 'POST', body: body() })
+        : await api('billings', { method: 'POST', body: body() });
       leaveGuard = null;
       toast(`Faktura ${b.invoice.number} je vytvořená ve Fakturách`);
       location.hash = `#/vyuctovani/${b.uid}`;
     }, e.submitter);
   };
-  if (!later) $('#mark-only').onclick = e => attempt(async () => {
-    const b = await api('billings', { method: 'POST', body: body(false) });
-    leaveGuard = null;
-    toast('Označeno jako vyfakturované');
-    location.hash = `#/vyuctovani/${b.uid}`;
-  }, e.currentTarget);
   const install = $('#install');
   if (install) install.onclick = () => installPeer('faktury', install);
 
@@ -1326,7 +1346,7 @@ function renderProject(params, p, entries, billings, offered, settings) {
         <h1>${id ? `<i class="dot ${colorOf(p)}"></i>${esc(p.name)}` : 'Nový projekt'}</h1>
         ${id ? `<p class="subtitle">${client ? `<a href="#/klient/${client.id}">${esc(client.name)}</a> · ` : ''}${esc(priceLabel(p))}${p.archived ? ' · archivovaný' : ''}</p>` : ''}
       </div>
-      ${unbilled.length ? `<div class="actions"><a class="btn primary" href="#/vyfakturovat?zaznamy=${unbilled.map(e => e.id).join(',')}">Vyfakturovat ${Fmt.clock(sumSecs(unbilled))}</a></div>` : ''}
+      ${unbilled.length ? `<div class="actions"><a class="btn primary" href="#/vyfakturovat?zaznamy=${unbilled.map(e => e.id).join(',')}">Vyfakturovat ${dur(sumSecs(unbilled))}</a></div>` : ''}
     </div>
     ${id ? `
       <div class="kpis">

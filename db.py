@@ -35,6 +35,7 @@ PRICINGS = ("hourly", "fixed")
 CUSTOMER_FIELDS = mejvos.CONTACT_FIELDS
 CLIENT_FIELDS = CUSTOMER_FIELDS + ("note",)
 COLORS = 8  # počet barev projektů v app.css
+ITEM_TEXT = 120  # nejdelší text položky faktury složený z popisů záznamů
 
 _lock = threading.Lock()
 
@@ -119,17 +120,36 @@ def publish(data):
 
 
 def sync_peers():
-    """Převezme novější údaje propojených klientů z ostatních aplikací (třeba IČO doplněné ve Fakturách).
-    Dívá se jen, když se od minule něco změnilo, takže je levné volat ho před každým požadavkem."""
+    """Převezme změny z ostatních aplikací: novější údaje propojených klientů (třeba IČO doplněné ve Fakturách)
+    a faktury, které někdo ve Fakturách smazal. Dívá se jen, když se od minule něco změnilo,
+    takže je levné volat ho před každým požadavkem."""
     global _peer_sig
-    sig = mejvos.signature("contacts", APP_ID)
+    sig = (mejvos.signature("contacts", APP_ID), mejvos.signature("invoices", APP_ID))
     if sig == _peer_sig:
         return
     with _lock:
         data = _load()
-        if mejvos.merge_contacts(data["clients"], mejvos.peer_contacts(APP_ID)):
+        changed = mejvos.merge_contacts(data["clients"], mejvos.peer_contacts(APP_ID))
+        changed += drop_deleted_invoices(data)
+        if changed:
             _commit(data)
     _peer_sig = sig
+
+
+def drop_deleted_invoices(data):
+    """Vyúčtování, jehož fakturu někdo ve Fakturách smazal, zruší – jeho záznamy jsou zase k vyfakturování.
+    Řídí se jen tím, co Faktury výslovně ohlásily jako smazané (deleted). Faktura, která v seznamu
+    jen chybí (třeba po přeinstalování Faktur), nic neruší. Vrátí počet zrušených vyúčtování."""
+    gone = set()
+    for app_id, d in mejvos.read("invoices", APP_ID).items():
+        live = {r.get("ref") for r in d["items"] if isinstance(r, dict) and r.get("app") == APP_ID}
+        for t in d.get("deleted") or []:
+            if isinstance(t, dict) and t.get("app") == APP_ID and t.get("ref") and t["ref"] not in live:
+                gone.add((app_id, t["ref"]))
+    dropped = [b for b in data["billings"] if b.get("invoice") and (b["invoice"]["app"], b["uid"]) in gone]
+    for b in dropped:
+        delete_billing(data, b["id"])
+    return len(dropped)
 
 
 def offered_contacts(data):
@@ -506,6 +526,20 @@ def delete_entry(data, eid):
             b["entry_ids"].remove(eid)
 
 
+def delete_entries(data, entry_ids):
+    """Smaže víc záznamů najednou. Buď všechny, nebo žádný (neexistující zabrání uložení)."""
+    ids = list(dict.fromkeys(_int(i) for i in entry_ids or []))
+    if None in ids:
+        raise ValueError("Neplatný záznam.")
+    if not ids:
+        raise ValueError("Nevybral jsi žádný záznam.")
+    for eid in ids:
+        get_entry(data, eid)
+    for eid in ids:
+        delete_entry(data, eid)
+    return {"deleted": len(ids)}
+
+
 def start_timer(data, values):
     """Spustí časovač. Když už nějaký běží, nejdřív ho zastaví (jako stopky: vždy běží jen jeden)."""
     stop_timer(data)
@@ -562,6 +596,20 @@ def _billable(data, entry_ids):
     return sorted(rows, key=lambda e: mejvos.parse_time(e["start"]))
 
 
+def _item_text(head, entries, empty):
+    """Text položky faktury: projekt a na čem se dělalo (popisy záznamů v pořadí, jak přibývaly).
+    Když se popisy nevejdou, skončí „a další“. Bez popisů je text empty."""
+    texts = list(dict.fromkeys(e["description"] for e in entries if e["description"]))
+    if not texts:
+        return empty
+    shown = []
+    for t in texts:
+        if shown and len(head) + len(", ".join(shown + [t])) + 3 > ITEM_TEXT:
+            return f"{head} – {', '.join(shown)} a další"
+        shown.append(t)
+    return f"{head} – {', '.join(shown)}"
+
+
 def _item(description, quantity, unit, price, project_id, kind, secs):
     q, p = Decimal(str(quantity)), Decimal(str(price))
     return {"description": description, "quantity": float(q), "unit": unit, "price": float(p),
@@ -586,13 +634,15 @@ def billing_preview(data, entry_ids, grouping=None):
         secs = sum(seconds(e) for e in part)
         p = projects.get(pid)
         if p is None:
-            items.append(_item("Práce", rounded_hours(secs, s["rounding"]), "hod", 0, None, "hourly", secs))
+            items.append(_item(_item_text("Práce", part, "Práce"), rounded_hours(secs, s["rounding"]), "hod", 0,
+                               None, "hourly", secs))
             warnings.append(f"{_plural(len(part), 'záznam nemá', 'záznamy nemají', 'záznamů nemá')} projekt, "
                             f"a tak ani cenu – doplň ji u položky „Práce“.")
             continue
+        text = _item_text(p["name"], part, f"Práce na projektu {p['name']}")
         if p["pricing"] == "fixed":
             done = stats[pid]["fixed_billed"]
-            items.append(_item(p["name"], 1, "", 0 if done else p["fixed_price"], pid, "fixed", secs))
+            items.append(_item(text, 1, "", 0 if done else p["fixed_price"], pid, "fixed", secs))
             if done:
                 warnings.append(f"Pevná cena projektu {p['name']} už je vyfakturovaná, a tak je položka za 0 Kč. "
                                 f"Když fakturuješ další část, uprav cenu.")
@@ -610,7 +660,7 @@ def billing_preview(data, entry_ids, grouping=None):
                 t = sum(seconds(e) for e in same)
                 items.append(_item(label, rounded_hours(t, s["rounding"]), "hod", p["rate"], pid, "hourly", t))
         else:
-            items.append(_item(p["name"], rounded_hours(secs, s["rounding"]), "hod", p["rate"], pid, "hourly", secs))
+            items.append(_item(text, rounded_hours(secs, s["rounding"]), "hod", p["rate"], pid, "hourly", secs))
 
     client_ids = []
     for pid in groups:
@@ -683,10 +733,10 @@ def find_billing(data, ref):
 
 def check_billing(data, values):
     """Ověří a vyčistí vyúčtování ještě před vystavením faktury, ať pak uložení nemůže selhat.
-    Bez položek (jen „označit jako vyfakturované“) se položky spočítají samy."""
+    Co ve values chybí (položky, odběratel), vezme z návrhu."""
     rows = _billable(data, values.get("entry_ids"))
     preview = billing_preview(data, [e["id"] for e in rows], values.get("grouping"))
-    invoice = _check_invoice(data, values, preview, required=bool(values.get("invoice")))
+    invoice = _check_invoice(data, values, preview)
     return {
         "uid": _text(values.get("uid")) or mejvos.new_uid(),
         "entry_ids": [e["id"] for e in rows],
@@ -700,32 +750,31 @@ def check_billing(data, values):
     }
 
 
-def _check_invoice(data, values, default, required, late=False):
+def _check_invoice(data, values, default):
     """Položky, odběratel a součet faktury; co v values chybí, vezme z default (návrhu nebo vyúčtování)."""
     items = _clean_items(values["items"]) if values.get("items") is not None else default["items"]
     given = values.get("customer") or default["customer"] or {}
     customer = {k: _text(given.get(k)) for k in CUSTOMER_FIELDS}
     customer["uid"] = _text(given.get("uid"))
     total = _money(sum((Decimal(str(i["amount"])) for i in items), Decimal(0)))
-    if required:
-        if not customer["name"]:
-            raise ValueError("Vyber nebo vyplň odběratele.")
-        if not items:
-            raise ValueError("Faktura musí mít aspoň jednu položku.")
-        if total <= 0:
-            raise ValueError("Faktura by byla na 0 Kč. Doplň ceny." if late else
-                             "Faktura by byla na 0 Kč. Doplň ceny, nebo záznamy jen označ jako vyfakturované.")
+    if not customer["name"]:
+        raise ValueError("Vyber nebo vyplň odběratele.")
+    if not items:
+        raise ValueError("Faktura musí mít aspoň jednu položku.")
+    if total <= 0:
+        raise ValueError("Faktura by byla na 0 Kč. Doplň ceny.")
     client_id = _int(values.get("client_id", default["client_id"]))
     return {
         "items": items,
         "total": total,
-        "customer": customer if customer["name"] else None,
+        "customer": customer,
         "client_id": client_id if any(c["id"] == client_id for c in data["clients"]) else None,
     }
 
 
 def billing_draft(data, ref):
-    """Návrh faktury k vyúčtování, které je zatím jen označené: to, co se při označení uložilo.
+    """Návrh faktury k vyúčtování, které fakturu nemá (ze starších verzí, kde šlo záznamy jen označit,
+    nebo jehož fakturu smazali dřív, než to Faktury začaly hlásit): to, co se v něm uložilo.
     Před vystavením jde všechno změnit, stejně jako u nového vyúčtování."""
     b = find_billing(data, ref)
     first, last = (date.fromisoformat(d) for d in b["period"])
@@ -746,13 +795,13 @@ def billing_draft(data, ref):
 
 def check_late_invoice(data, billing, values):
     """Ověří fakturu, která se k vyúčtování vystavuje dodatečně. Vrátí, co se ve vyúčtování změní."""
-    invoice = _check_invoice(data, values, billing, required=True, late=True)
+    invoice = _check_invoice(data, values, billing)
     return {**invoice, "note": _text(values["note"]) if "note" in values else billing["note"]}
 
 
 def create_billing(data, checked, invoice=None):
     """Uloží vyúčtování (z check_billing) a označí jeho záznamy jako vyfakturované.
-    invoice = odkaz na fakturu v jiné aplikaci, nebo None (označeno ručně)."""
+    invoice = odkaz na fakturu v jiné aplikaci (ve starších verzích šlo vyúčtovat i bez faktury)."""
     billing = {"id": _next_id(data["billings"]), **checked, "invoice": invoice, "created_at": mejvos.now()}
     data["billings"].append(billing)
     for eid in checked["entry_ids"]:
@@ -763,7 +812,7 @@ def create_billing(data, checked, invoice=None):
 
 
 def delete_billing(data, ref):
-    """Vrátí záznamy vyúčtování mezi nevyfakturované. Faktura v jiné aplikaci zůstane, jak je."""
+    """Vrátí záznamy vyúčtování mezi nevyfakturované. Na fakturu v jiné aplikaci nesahá (to dělá server.unbill)."""
     billing = find_billing(data, ref)
     data["billings"].remove(billing)
     count = 0
