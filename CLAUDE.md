@@ -7,4 +7,5 @@ Měření odpracovaného času pro Mac. Patří do systému aplikací MejvOS spo
 - Bez závislostí: Python 3.9+ jen se standardní knihovnou, čistý JavaScript bez buildu. Testy `python3 -m unittest discover tests` musí projít i na Pythonu 3.9.
 - Texty v aplikaci i komentáře v kódu česky, uživateli se tyká. README a texty v aplikaci jsou pro běžné lidi s Macem: název MejvOS se jim neukazuje, technické věci patří do `docs/`.
 - Okno pro macOS (`macos/Hodinovka.swift`) jde zkompilovat jen na Macu, ověřuje ho GitHub Actions.
+- Pracuj rovnou v `main`, žádné další větve ani pull requesty.
 - Vydání: zvýšit `VERSION` a pushnout do `main`.
