@@ -6,7 +6,8 @@
 
 <p align="center">
   Měření odpracovaného času pro Mac.<br>
-  Zapneš, pracuješ, vypneš. A na konci měsíce víš, kolik komu vyfakturovat.
+  Zapneš, pracuješ, vypneš. A na konci měsíce víš, kolik komu vyfakturovat.<br>
+  <b>Celá zdarma</b>, bez předplatného a bez placené verze.
 </p>
 
 <p align="center">
@@ -17,6 +18,11 @@
   <source media="(prefers-color-scheme: dark)" srcset="docs/cas-dark.png">
   <img src="docs/cas-light.png" alt="Běžící časovač a odpracovaný čas po dnech">
 </picture>
+
+## Zdarma, bez háčku
+
+Aplikace na měření času většinou chtějí platit každý měsíc, nebo fakturaci a přehledy schovají za placenou verzi.
+Hodinovka je celá zdarma, a Faktury taky: žádné předplatné, žádná placená verze, žádné limity a ani účet si nezakládáš.
 
 ## Co za tebe vyřeší
 
