@@ -1512,7 +1512,6 @@ async function viewClient(params, id) {
         <h1>${id ? esc(client.name) : 'Nový klient'}</h1>
         ${id ? `<a class="btn primary" href="#/projekt/novy?klient=${id}">Nový projekt</a>` : ''}
       </div>
-      ${id && client.linked.length ? `<div class="notice info">Klient je propojený s aplikací ${esc(client.linked.map(a => a.name).join(', '))}. Změny údajů se přenesou i tam.</div>` : ''}
       <form id="client-form" class="card" autocomplete="off" novalidate>
         <div class="grid">
           ${contactFields(client, 'name')}
@@ -1590,7 +1589,7 @@ async function viewSettings() {
       </form>
       <section class="card">
         <h2>Propojené aplikace</h2>
-        <p style="margin-top:0">Hodinovka patří do systému <b>${esc(peers.system)}</b>. Aplikace na tomhle Macu se najdou samy, sdílí klienty a z Hodinovky jde jedním kliknutím vystavit fakturu ve Fakturách.</p>
+        <p style="margin-top:0">Hodinovka spolupracuje s Fakturami, stačí je mít nainstalované. Odpracovaný čas pak vyfakturuješ jedním kliknutím.</p>
         <div class="apps">${peers.apps.map(a => `
           <div class="app-row">
             ${appIcon(a.id, 36)}
@@ -1605,8 +1604,8 @@ async function viewSettings() {
       </section>
       <section class="card">
         <h2>Data a zálohy</h2>
-        <p style="margin-top:0">Všechno je ve složce <b>${esc(cloud.data)}</b> v souboru <b>hodinovka.json</b>.
-        Před první změnou každého dne se uloží kopie do <b>zalohy</b> (posledních 30 dní).</p>
+        <p style="margin-top:0">Záznamy, projekty i klienty máš jen u sebe na Macu ve složce <b>${esc(cloud.data)}</b>.
+        Každý den se zálohují do její podsložky <b>zalohy</b> (posledních 30 dní).</p>
         ${cloudStatus(cloud)}
         <div class="actions"><a class="btn" href="/api/export" download>Stáhnout zálohu dat</a><a class="btn" href="/api/export/csv" download>Výkaz práce (CSV)</a></div>
       </section>
