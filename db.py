@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
-import mejvos
+import propojeni
 
 APP_ID = "hodinovka"
 ROOT = Path(__file__).resolve().parent
@@ -32,7 +32,7 @@ DEFAULT_SETTINGS = {
 ROUNDINGS = (0, 6, 15, 30, 60)
 GROUPINGS = ("project", "description")
 PRICINGS = ("hourly", "fixed")
-CUSTOMER_FIELDS = mejvos.CONTACT_FIELDS
+CUSTOMER_FIELDS = propojeni.CONTACT_FIELDS
 CLIENT_FIELDS = CUSTOMER_FIELDS + ("note",)
 COLORS = 8  # počet barev projektů v app.css
 ITEM_TEXT = 120  # nejdelší text položky faktury složený z popisů záznamů
@@ -109,14 +109,14 @@ def backup_now(label):
     return target
 
 
-# ---------- propojení s ostatními aplikacemi (MejvOS) ----------
+# ---------- propojení s ostatními aplikacemi ----------
 
 _peer_sig = None
 
 
 def publish(data):
     """Zveřejní klienty ostatním aplikacím (třeba Fakturám)."""
-    mejvos.publish_contacts(APP_ID, data["clients"])
+    propojeni.publish_contacts(APP_ID, data["clients"])
 
 
 def sync_peers():
@@ -124,12 +124,12 @@ def sync_peers():
     a faktury, které někdo ve Fakturách smazal. Dívá se jen, když se od minule něco změnilo,
     takže je levné volat ho před každým požadavkem."""
     global _peer_sig
-    sig = (mejvos.signature("contacts", APP_ID), mejvos.signature("invoices", APP_ID))
+    sig = (propojeni.signature("contacts", APP_ID), propojeni.signature("invoices", APP_ID))
     if sig == _peer_sig:
         return
     with _lock:
         data = _load()
-        changed = mejvos.merge_contacts(data["clients"], mejvos.peer_contacts(APP_ID))
+        changed = propojeni.merge_contacts(data["clients"], propojeni.peer_contacts(APP_ID))
         changed += drop_deleted_invoices(data)
         if changed:
             _commit(data)
@@ -141,7 +141,7 @@ def drop_deleted_invoices(data):
     Řídí se jen tím, co Faktury výslovně ohlásily jako smazané (deleted). Faktura, která v seznamu
     jen chybí (třeba po přeinstalování Faktur), nic neruší. Vrátí počet zrušených vyúčtování."""
     gone = set()
-    for app_id, d in mejvos.read("invoices", APP_ID).items():
+    for app_id, d in propojeni.read("invoices", APP_ID).items():
         live = {r.get("ref") for r in d["items"] if isinstance(r, dict) and r.get("app") == APP_ID}
         for t in d.get("deleted") or []:
             if isinstance(t, dict) and t.get("app") == APP_ID and t.get("ref") and t["ref"] not in live:
@@ -154,7 +154,7 @@ def drop_deleted_invoices(data):
 
 def offered_contacts(data):
     """Kontakty z ostatních aplikací, které v Hodinovce ještě nejsou – nabízí se při výběru klienta."""
-    return mejvos.offered_contacts(data["clients"], mejvos.peer_contacts(APP_ID))
+    return propojeni.offered_contacts(data["clients"], propojeni.peer_contacts(APP_ID))
 
 
 def revision():
@@ -165,7 +165,7 @@ def revision():
         own = (st.st_mtime_ns, st.st_size, st.st_ino)  # ukládá se vždy do nového souboru (viz _save)
     except OSError:
         own = None
-    sig = (own, mejvos.signature("contacts", APP_ID), mejvos.signature("invoices", APP_ID))
+    sig = (own, propojeni.signature("contacts", APP_ID), propojeni.signature("invoices", APP_ID))
     return hashlib.sha1(repr(sig).encode()).hexdigest()[:16]
 
 
@@ -173,7 +173,7 @@ def invoice_states():
     """Stav faktur vystavených z Hodinovky, jak ho zveřejnily Faktury: {app: {ref: řádek}}.
     Aplikace, která nic nezveřejnila, ve výsledku chybí (stav neznáme)."""
     out = {}
-    for app_id, d in mejvos.read("invoices", APP_ID).items():
+    for app_id, d in propojeni.read("invoices", APP_ID).items():
         out[app_id] = {"ready": d.get("ready"), "rows": {
             r["ref"]: r for r in d["items"] if isinstance(r, dict) and r.get("app") == APP_ID and r.get("ref")}}
     return out
@@ -215,7 +215,7 @@ def cloud_sync():
             _copy_if_changed(src, target / src.relative_to(DATA))
         for old in sorted((target / ZALOHY.name).glob("hodinovka-*.json"))[:-ZALOHY_POCET]:
             old.unlink()
-        cloud_status.update(last=mejvos.now(), error=None)
+        cloud_status.update(last=propojeni.now(), error=None)
     except Exception as e:  # záloha nesmí shodit server – chyba se ukáže v Nastavení
         cloud_status["error"] = str(e)
         print(f"Záloha do iCloud Drive selhala: {e}", file=sys.stderr, flush=True)
@@ -256,7 +256,7 @@ def _money(d):
 
 
 def _time(v, label):
-    dt = mejvos.parse_time(v)
+    dt = propojeni.parse_time(v)
     if dt is None:
         raise ValueError(f"{label}: neplatný čas.")
     return dt.astimezone().isoformat(timespec="seconds")
@@ -290,8 +290,8 @@ def _cz_date(d):
 
 def seconds(entry, now=None):
     """Délka záznamu v sekundách; běžící záznam se počítá do teď."""
-    start = mejvos.parse_time(entry["start"])
-    end = mejvos.parse_time(entry["end"]) if entry.get("end") else (now or datetime.now().astimezone())
+    start = propojeni.parse_time(entry["start"])
+    end = propojeni.parse_time(entry["end"]) if entry.get("end") else (now or datetime.now().astimezone())
     return max(0, int((end - start).total_seconds()))
 
 
@@ -335,7 +335,7 @@ def save_settings(data, values):
 def list_clients(data):
     stats = project_stats(data)
     linked = {}  # uid → {id aplikace: název}
-    for peer in mejvos.peer_contacts(APP_ID):
+    for peer in propojeni.peer_contacts(APP_ID):
         linked.setdefault(peer["uid"], {})[peer["app"]] = peer["app_name"]
     out = []
     for c in data["clients"]:
@@ -358,13 +358,13 @@ def save_client(data, values, cid=None):
     clean = {k: _text(values.get(k)) for k in CLIENT_FIELDS}
     if not clean["name"]:
         raise ValueError("Vyplň název nebo jméno klienta.")
-    now = mejvos.now()
+    now = propojeni.now()
     if cid is None:
         uid = _text(values.get("uid"))
         existing = next((c for c in data["clients"] if uid and c["uid"] == uid), None)
         if existing:
             return existing
-        client = {"id": _next_id(data["clients"]), "uid": uid or mejvos.new_uid(), **clean,
+        client = {"id": _next_id(data["clients"]), "uid": uid or propojeni.new_uid(), **clean,
                   "created_at": now, "updated_at": now}
         data["clients"].append(client)
         return client
@@ -418,13 +418,13 @@ def save_project(data, values, pid=None):
         "fixed_price": _money(fixed),
         "note": _text(values.get("note")),
         "archived": values.get("archived") is True,
-        "updated_at": mejvos.now(),
+        "updated_at": propojeni.now(),
     }
     if existing:
         existing.update(fields)
         return existing
     project = {"id": _next_id(data["projects"]), **fields,
-               "color": len(data["projects"]) % COLORS, "created_at": mejvos.now()}
+               "color": len(data["projects"]) % COLORS, "created_at": propojeni.now()}
     data["projects"].append(project)
     return project
 
@@ -498,23 +498,23 @@ def save_entry(data, values, eid=None):
     start = _time(values.get("start", old.get("start")), "Začátek")
     if is_running:
         end = None
-        if mejvos.parse_time(start) > datetime.now().astimezone():
+        if propojeni.parse_time(start) > datetime.now().astimezone():
             raise ValueError("Běžící záznam nemůže začínat v budoucnu.")
     else:
         end = _time(values.get("end", old.get("end")), "Konec")
-        if mejvos.parse_time(end) < mejvos.parse_time(start):
+        if propojeni.parse_time(end) < propojeni.parse_time(start):
             raise ValueError("Konec nemůže být dřív než začátek.")
     fields = {
         "description": _text(values.get("description", old.get("description"))),
         "project_id": _project_id(data, values.get("project_id", old.get("project_id"))),
         "start": start,
         "end": end,
-        "updated_at": mejvos.now(),
+        "updated_at": propojeni.now(),
     }
     if existing:
         existing.update(fields)
         return existing
-    entry = {"id": _next_id(data["entries"]), **fields, "billing_id": None, "created_at": mejvos.now()}
+    entry = {"id": _next_id(data["entries"]), **fields, "billing_id": None, "created_at": propojeni.now()}
     data["entries"].append(entry)
     return entry
 
@@ -544,7 +544,7 @@ def delete_entries(data, entry_ids):
 def start_timer(data, values):
     """Spustí časovač. Když už nějaký běží, nejdřív ho zastaví (jako stopky: vždy běží jen jeden)."""
     stop_timer(data)
-    now = mejvos.now()
+    now = propojeni.now()
     start = _time(values.get("start"), "Začátek") if values.get("start") else now
     entry = {
         "id": _next_id(data["entries"]),
@@ -565,8 +565,8 @@ def stop_timer(data):
     entry = running(data)
     if not entry:
         return None
-    now = mejvos.now()
-    entry["end"] = max(now, entry["start"], key=lambda t: mejvos.parse_time(t))
+    now = propojeni.now()
+    entry["end"] = max(now, entry["start"], key=lambda t: propojeni.parse_time(t))
     entry["updated_at"] = now
     return entry
 
@@ -574,7 +574,7 @@ def stop_timer(data):
 # ---------- vyúčtování ----------
 
 def _entry_label(e):
-    when = mejvos.parse_time(e["start"]).astimezone()
+    when = propojeni.parse_time(e["start"]).astimezone()
     return f"„{e['description']}“ z {_cz_date(when)}" if e["description"] else f"z {_cz_date(when)}"
 
 
@@ -594,7 +594,7 @@ def _billable(data, entry_ids):
             raise ValueError("Běžící záznam nejde vyfakturovat – nejdřív zastav časovač.")
         if e.get("billing_id"):
             raise ValueError(f"Záznam {_entry_label(e)} už je vyfakturovaný.")
-    return sorted(rows, key=lambda e: mejvos.parse_time(e["start"]))
+    return sorted(rows, key=lambda e: propojeni.parse_time(e["start"]))
 
 
 def _item_text(head, entries, empty):
@@ -674,8 +674,8 @@ def billing_preview(data, entry_ids, grouping=None):
                         f"Faktura bude na jednoho odběratele.")
     customer = {"uid": clients[0]["uid"], **{k: clients[0].get(k, "") for k in CUSTOMER_FIELDS}} if clients else None
 
-    first = mejvos.parse_time(rows[0]["start"]).astimezone().date()
-    last = max(mejvos.parse_time(e["end"]).astimezone().date() for e in rows)
+    first = propojeni.parse_time(rows[0]["start"]).astimezone().date()
+    last = max(propojeni.parse_time(e["end"]).astimezone().date() for e in rows)
 
     return {
         "entry_ids": [e["id"] for e in rows],
@@ -739,7 +739,7 @@ def check_billing(data, values):
     preview = billing_preview(data, [e["id"] for e in rows], values.get("grouping"))
     invoice = _check_invoice(data, values, preview)
     return {
-        "uid": _text(values.get("uid")) or mejvos.new_uid(),
+        "uid": _text(values.get("uid")) or propojeni.new_uid(),
         "entry_ids": [e["id"] for e in rows],
         "items": invoice["items"],
         "total": invoice["total"],
@@ -803,7 +803,7 @@ def check_late_invoice(data, billing, values):
 def create_billing(data, checked, invoice=None):
     """Uloží vyúčtování (z check_billing) a označí jeho záznamy jako vyfakturované.
     invoice = odkaz na fakturu v jiné aplikaci (ve starších verzích šlo vyúčtovat i bez faktury)."""
-    billing = {"id": _next_id(data["billings"]), **checked, "invoice": invoice, "created_at": mejvos.now()}
+    billing = {"id": _next_id(data["billings"]), **checked, "invoice": invoice, "created_at": propojeni.now()}
     data["billings"].append(billing)
     for eid in checked["entry_ids"]:
         e = get_entry(data, eid)
@@ -820,7 +820,7 @@ def delete_billing(data, ref):
     for e in data["entries"]:
         if e.get("billing_id") == billing["id"]:
             e["billing_id"] = None
-            e["updated_at"] = mejvos.now()
+            e["updated_at"] = propojeni.now()
             count += 1
     return {"returned": count}
 
@@ -842,13 +842,13 @@ def entries_csv(data, entries):
     for e in sorted(entries, key=lambda e: e["start"]):
         if not e.get("end"):
             continue
-        start, end = mejvos.parse_time(e["start"]).astimezone(), mejvos.parse_time(e["end"]).astimezone()
+        start, end = propojeni.parse_time(e["start"]).astimezone(), propojeni.parse_time(e["end"]).astimezone()
         p = projects.get(e.get("project_id")) or {}
         c = clients.get(p.get("client_id")) or {}
         b = billings.get(e.get("billing_id"))
         billed = ""
         if b:
-            billed = f"faktura {b['invoice']['number']}" if b.get("invoice") else f"ano ({_cz_date(mejvos.parse_time(b['created_at']).date())})"
+            billed = f"faktura {b['invoice']['number']}" if b.get("invoice") else f"ano ({_cz_date(propojeni.parse_time(b['created_at']).date())})"
         w.writerow([_cz_date(start), start.strftime("%H:%M"), end.strftime("%H:%M"),
                     f"{seconds(e) / 3600:.2f}".replace(".", ","), e["description"], p.get("name", ""),
                     c.get("name", ""), billed])

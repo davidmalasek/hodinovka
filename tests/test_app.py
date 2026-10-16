@@ -1,4 +1,4 @@
-"""Testy dat, propojení aplikací (MejvOS) a serveru. Spuštění: python3 -m unittest discover tests"""
+"""Testy dat, propojení aplikací a serveru. Spuštění: python3 -m unittest discover tests"""
 import json
 import sys
 import tempfile
@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import db  # noqa: E402
-import mejvos  # noqa: E402
+import propojeni  # noqa: E402
 import server  # noqa: E402
 import update  # noqa: E402
 
@@ -33,20 +33,21 @@ class TempData(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self._orig = {k: getattr(db, k) for k in ("DATA", "DATA_FILE", "ZALOHY", "ICLOUD")}
-        self._mejvos = (mejvos.HOME, mejvos.ENABLED)
+        self._propojeni = (propojeni.HOME, propojeni.OLD_HOME, propojeni.ENABLED)
         db.ICLOUD = None  # testy se nikdy nesmí dotknout skutečného iCloudu
         db.DATA = root / "data"
         db.DATA_FILE = db.DATA / "hodinovka.json"
         db.ZALOHY = db.DATA / "zalohy"
         db._peer_sig = None
-        mejvos.HOME = root / "MejvOS"  # ani skutečného systému MejvOS
-        mejvos.ENABLED = False
+        propojeni.HOME = root / "propojeni"  # ani skutečné sdílené složky
+        propojeni.OLD_HOME = root / "stara-sdilena"
+        propojeni.ENABLED = False
         db.init()
 
     def tearDown(self):
         for k, v in self._orig.items():
             setattr(db, k, v)
-        mejvos.HOME, mejvos.ENABLED = self._mejvos
+        propojeni.HOME, propojeni.OLD_HOME, propojeni.ENABLED = self._propojeni
         self.tmp.cleanup()
 
     def stored(self):
@@ -294,58 +295,77 @@ class DataTests(TempData):
                 db.save_settings(data, {"rounding": "7"})
 
 
-# ---------- MejvOS ----------
+# ---------- propojení ----------
 
-class MejvosTests(TempData):
+class PropojeniTests(TempData):
     def manifest(self, app_id, api="http://127.0.0.1:1/api/os", provides=("contacts",), version="1.4.0"):
         launcher = Path(self.tmp.name) / app_id / "spustit.sh"
         launcher.parent.mkdir(exist_ok=True)
         launcher.write_text("#!/bin/bash\nexit 0\n")
-        mejvos._write_json(mejvos.HOME / "apps" / f"{app_id}.json", {
+        propojeni._write_json(propojeni.HOME / "apps" / f"{app_id}.json", {
             "id": app_id, "name": app_id.capitalize(), "version": version, "api": api, "provides": list(provides),
             "launch": {"command": ["/bin/bash", str(launcher)]}, "scheme": app_id})
         return launcher
 
+    def test_old_shared_folder_moves_and_link_goes_away(self):
+        old, launcher = propojeni.OLD_HOME, Path(self.tmp.name) / "faktury-spustit.sh"
+        launcher.write_text("", encoding="utf-8")
+        peer = {"id": "faktury", "api": "http://127.0.0.1:1/api/os", "launch": {"command": [str(launcher)]}}
+        propojeni._write_json(old / "apps/faktury.json", {**peer, "protocol": 1})
+        propojeni._write_json(old / "contacts/faktury.json", {"items": [{"uid": "a", "name": "A"}]})
+        propojeni.ENABLED = True
+        announce = lambda: propojeni.announce("hodinovka", name="hodinovka", version="9.9.9", port=1, root=db.ROOT, provides=[])  # noqa: E731
+        announce()
+        self.assertTrue((propojeni.HOME / "contacts/faktury.json").exists())
+        self.assertTrue(old.is_symlink())  # starší verze druhé aplikace ji najde přes odkaz
+        self.assertTrue((old / "apps/hodinovka.json").exists())
+        announce()
+        self.assertTrue(old.is_symlink())
+        propojeni._write_json(propojeni.HOME / "apps/faktury.json", {**peer, "protocol": 2})  # aktualizovala se
+        announce()
+        self.assertFalse(old.is_symlink() or old.exists())
+        self.assertTrue((propojeni.HOME / "contacts/faktury.json").exists())
+
     def test_nothing_is_written_unless_enabled(self):
         with db.open_data(True) as data:
             db.save_client(data, {"name": "A"})
-        self.assertFalse(mejvos.HOME.exists())
-        mejvos.ENABLED = True
-        mejvos.announce("hodinovka", name="Hodinovka", version="1.0.0", port=8766, root=db.ROOT, provides=["contacts"])
+        self.assertFalse(propojeni.HOME.exists())
+        propojeni.ENABLED = True
+        propojeni.announce("hodinovka", name="Hodinovka", version="1.0.0", port=8766, root=db.ROOT, provides=["contacts"])
         with db.open_data(True) as data:
             db.save_client(data, {"name": "B"})
-        m = json.loads((mejvos.HOME / "apps/hodinovka.json").read_text(encoding="utf-8"))
-        self.assertEqual((m["api"], m["scheme"], m["protocol"]), ("http://localhost:8766/api/os", "hodinovka", 1))
-        published = json.loads((mejvos.HOME / "contacts/hodinovka.json").read_text(encoding="utf-8"))
+        m = json.loads((propojeni.HOME / "apps/hodinovka.json").read_text(encoding="utf-8"))
+        self.assertEqual((m["api"], m["scheme"], m["protocol"]), ("http://localhost:8766/api/os", "hodinovka", 2))
+        published = json.loads((propojeni.HOME / "contacts/hodinovka.json").read_text(encoding="utf-8"))
         self.assertEqual([c["name"] for c in published["items"]], ["A", "B"])
 
     def test_unchanged_lists_are_not_rewritten(self):
-        mejvos.ENABLED = True
-        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
-        sig = mejvos.signature("contacts")
-        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
-        self.assertEqual(mejvos.signature("contacts"), sig)  # ostatní se zbytečně neobnovují
-        mejvos.publish_contacts("hodinovka", [{"uid": "a", "name": "B"}])
-        self.assertNotEqual(mejvos.signature("contacts"), sig)
+        propojeni.ENABLED = True
+        propojeni.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
+        sig = propojeni.signature("contacts")
+        propojeni.publish_contacts("hodinovka", [{"uid": "a", "name": "A"}])
+        self.assertEqual(propojeni.signature("contacts"), sig)  # ostatní se zbytečně neobnovují
+        propojeni.publish_contacts("hodinovka", [{"uid": "a", "name": "B"}])
+        self.assertNotEqual(propojeni.signature("contacts"), sig)
 
     def test_uninstalled_apps_are_ignored(self):
         launcher = self.manifest("faktury")
-        self.assertEqual([a["id"] for a in mejvos.apps()], ["faktury"])
-        self.assertEqual(mejvos.apps(exclude="faktury"), [])
+        self.assertEqual([a["id"] for a in propojeni.apps()], ["faktury"])
+        self.assertEqual(propojeni.apps(exclude="faktury"), [])
         launcher.unlink()
-        self.assertEqual(mejvos.apps(), [])
-        (mejvos.HOME / "apps/rozbity.json").write_text("{", encoding="utf-8")
-        self.assertEqual(mejvos.apps(), [])
+        self.assertEqual(propojeni.apps(), [])
+        (propojeni.HOME / "apps/rozbity.json").write_text("{", encoding="utf-8")
+        self.assertEqual(propojeni.apps(), [])
 
     def test_peer_contacts_are_offered_once(self):
         self.manifest("faktury")
-        mejvos._write_json(mejvos.HOME / "contacts/faktury.json", {"items": [
+        propojeni._write_json(propojeni.HOME / "contacts/faktury.json", {"items": [
             {"uid": "f1", "name": "Kavárna s.r.o.", "ico": "11111111"},
             {"uid": "f2", "name": "Nový klient"},
             {"uid": "f3", "name": "Petra Malá"},
             {"uid": "", "name": "Bez uid"},
         ]})
-        mejvos._write_json(mejvos.HOME / "contacts/odinstalovana.json", {"items": [{"uid": "x", "name": "X"}]})
+        propojeni._write_json(propojeni.HOME / "contacts/odinstalovana.json", {"items": [{"uid": "x", "name": "X"}]})
         with db.open_data(True) as data:
             db.save_client(data, {"name": "Kavárna", "ico": "11111111"})  # stejné IČO
             db.save_client(data, {"name": "petra malá"})  # stejné jméno
@@ -359,7 +379,7 @@ class MejvosTests(TempData):
             c = db.save_client(data, {"name": "Kavárna", "uid": "u1", "note": "moje poznámka"})
             c["updated_at"] = hour_ago
         later = (datetime.now().astimezone() - timedelta(minutes=30)).isoformat()
-        mejvos._write_json(mejvos.HOME / "contacts/faktury.json", {"items": [
+        propojeni._write_json(propojeni.HOME / "contacts/faktury.json", {"items": [
             {"uid": "u1", "name": "Kavárna s.r.o.", "ico": "12345678", "street": "", "updated_at": later}]})
         db.sync_peers()
         stored = self.stored()["clients"][0]
@@ -369,45 +389,45 @@ class MejvosTests(TempData):
         # starší údaje z jiné aplikace nic nepřepíšou a prázdné hodnoty nic nesmažou
         with db.open_data(True) as data:
             db.save_client(data, {**data["clients"][0], "name": "Kavárna U Mlýna"}, c["id"])
-        mejvos._write_json(mejvos.HOME / "contacts/faktury.json", {"items": [
+        propojeni._write_json(propojeni.HOME / "contacts/faktury.json", {"items": [
             {"uid": "u1", "name": "Stará", "updated_at": later}]})
         db.sync_peers()
         self.assertEqual(self.stored()["clients"][0]["name"], "Kavárna U Mlýna")
 
     def test_merge_handles_mixed_time_formats(self):
         rows = [{"uid": "a", "name": "A", "created_at": "2026-01-01T10:00:00"}]  # starší data bez pásma
-        peers = [{**mejvos.contact({"uid": "a", "name": "B", "ico": "1"}), "updated_at": "2026-02-01T10:00:00+01:00"}]
-        self.assertEqual(mejvos.merge_contacts(rows, peers), 1)
+        peers = [{**propojeni.contact({"uid": "a", "name": "B", "ico": "1"}), "updated_at": "2026-02-01T10:00:00+01:00"}]
+        self.assertEqual(propojeni.merge_contacts(rows, peers), 1)
         self.assertEqual((rows[0]["name"], rows[0]["ico"]), ("B", "1"))
-        self.assertEqual(mejvos.merge_contacts(rows, peers), 0)
+        self.assertEqual(propojeni.merge_contacts(rows, peers), 0)
 
     def test_call_reports_errors_and_starts_app(self):
         fake = FakeFaktury()
         self.addCleanup(fake.close)
         self.manifest("faktury", api=fake.api, provides=["contacts", "invoices"])
-        app = mejvos.find("invoices")
-        self.assertEqual(mejvos.call(app, "GET", "")["id"], "faktury")
+        app = propojeni.find("invoices")
+        self.assertEqual(propojeni.call(app, "GET", "")["id"], "faktury")
         fake.fail_with = "Faktura s číslem 1 už existuje."
-        with self.assertRaisesRegex(mejvos.PeerError, "už existuje"):
-            mejvos.call(app, "POST", "invoices", {})
+        with self.assertRaisesRegex(propojeni.PeerError, "už existuje"):
+            propojeni.call(app, "POST", "invoices", {})
         offline = {**app, "api": "http://127.0.0.1:9/api/os"}
-        with self.assertRaisesRegex(mejvos.PeerError, "neběží"):
-            mejvos.call(offline, "GET", "", launch=False)
-        with mock.patch.object(mejvos, "start") as start, self.assertRaisesRegex(mejvos.PeerError, "neodpovídá"):
-            mejvos.call(offline, "GET", "", timeout=1)
+        with self.assertRaisesRegex(propojeni.PeerError, "neběží"):
+            propojeni.call(offline, "GET", "", launch=False)
+        with mock.patch.object(propojeni, "start") as start, self.assertRaisesRegex(propojeni.PeerError, "neodpovídá"):
+            propojeni.call(offline, "GET", "", timeout=1)
         start.assert_called_once()
 
     def test_overview_lists_catalog(self):
         self.manifest("faktury")
-        with mock.patch.object(mejvos, "alive", return_value=True):
-            apps = mejvos.overview("hodinovka")["apps"]
+        with mock.patch.object(propojeni, "alive", return_value=True):
+            apps = propojeni.overview("hodinovka")["apps"]
         self.assertEqual([(a["id"], a["state"]) for a in apps], [("faktury", "running")])
         self.assertIn("Faktury.zip", apps[0]["download"])
 
     def test_app_icons(self):
         # Nastavení ukazuje skutečné ikony aplikací: složka je v každé aplikaci stejná a zná celý katalog
-        icons = db.ROOT / "static/mejvos"
-        self.assertEqual(sorted(p.stem for p in icons.glob("*.svg")), sorted(mejvos.CATALOG))
+        icons = db.ROOT / "static/aplikace"
+        self.assertEqual(sorted(p.stem for p in icons.glob("*.svg")), sorted(propojeni.CATALOG))
         self.assertEqual((icons / f"{db.APP_ID}.svg").read_bytes(), (db.ROOT / "static/icon.svg").read_bytes())
 
 
@@ -461,12 +481,12 @@ class FakeFaktury:
     def delete(self, ref):
         """Smaže fakturu jako ve Fakturách: zmizí ze seznamu a ohlásí se jako smazaná."""
         self.invoices = [i for i in self.invoices if i["ref"] != ref]
-        self.deleted.append({"app": "hodinovka", "ref": ref, "deleted_at": mejvos.now()})
+        self.deleted.append({"app": "hodinovka", "ref": ref, "deleted_at": propojeni.now()})
         self.publish()
 
     def publish(self):
         if self.home:
-            mejvos._write_json(self.home / "invoices/faktury.json", {"ready": True, "items": [
+            propojeni._write_json(self.home / "invoices/faktury.json", {"ready": True, "items": [
                 {k: v for k, v in i.items() if k != "body"} for i in self.invoices], "deleted": self.deleted})
 
     def close(self):
@@ -480,7 +500,7 @@ def release_zip(version, files, prefix=None):
     """Archiv verze ve tvaru, v jakém ho dává GitHub (vše ve složce hodinovka-<verze>/)."""
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        for name, (content, mode) in {"VERSION": (version, 0o644), "server.py": ("# nový", 0o644), **files}.items():
+        for name, (content, mode) in {"VERSION": (version, 0o644), "server.py": ("# nový", 0o644), "macos/Hodinovka.swift": ("okno", 0o644), **files}.items():
             info = zipfile.ZipInfo(f"{prefix or 'hodinovka-' + version}/{name}")
             info.external_attr = (0o100000 | mode) << 16
             z.writestr(info, content)
@@ -520,6 +540,19 @@ class UpdateTests(TempData):
         self.assertEqual((self.root / "data/hodinovka.json").read_text(encoding="utf-8"), "moje data")
         self.assertTrue((self.root / "spustit.sh").stat().st_mode & 0o100)
         self.assertFalse((self.root / "python").exists())
+
+    def test_apply_removes_files_missing_in_new_version(self):
+        (self.root / "stary.py").write_text("# přejmenovaný", encoding="utf-8")
+        (self.root / "static/stare").mkdir(parents=True)
+        (self.root / "static/stare/ikona.svg").write_text("<svg/>", encoding="utf-8")
+        (self.root / "python/bin").mkdir(parents=True)
+        (self.root / "python/bin/python3").write_text("python", encoding="utf-8")
+        update.apply_zip(release_zip("1.1.0", {"static/app.js": ("// nový", 0o644)}), self.root, "1.1.0")
+        self.assertFalse((self.root / "stary.py").exists())
+        self.assertFalse((self.root / "static/stare").exists())
+        self.assertTrue((self.root / "static/app.js").exists())
+        self.assertTrue((self.root / "python/bin/python3").exists())
+        self.assertTrue((self.root / "data/hodinovka.json").exists())
 
     def test_apply_reports_changed_app_window(self):
         self.assertTrue(update.apply_zip(release_zip("1.1.0", {"macos/Hodinovka.swift": ("nové okno", 0o644)}), self.root, "1.1.0"))
@@ -625,9 +658,9 @@ class ServerTests(TempData):
         self.assertEqual(self.call("POST", "/api/entries/delete", {"entry_ids": [1]})[0], 404)
 
     def test_billing_creates_invoice_in_faktury(self):
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
         _, ids = self.make_entries()
         _, preview = self.call("POST", "/api/billings/preview", {"entry_ids": ids})
         body = {"uid": "u-1", "entry_ids": ids, "items": preview["items"],
@@ -664,9 +697,9 @@ class ServerTests(TempData):
         self.assertIn("nejsou Faktury", err["error"])
         self.assertIsNone(self.stored()["billings"][0]["invoice"])
 
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
         status, b = self.call("POST", "/api/billings/m-1/invoice", body)
         self.assertEqual((status, b["invoice"]["number"], b["total"], b["invoice_state"]["status"]), (200, "20260001", 3600.0, "issued"))
         self.assertEqual(fake.invoices[0]["body"]["source"]["ref"], "m-1")
@@ -686,9 +719,9 @@ class ServerTests(TempData):
         self.assertEqual((status, b["invoice"]["app"]), (201, "faktury"))
 
     def test_unbilling_deletes_invoice_in_faktury(self):
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
         _, ids = self.make_entries()
         self.billed("u-1", ids)
         fake.invoices[0]["status"] = "paid"
@@ -707,9 +740,9 @@ class ServerTests(TempData):
         self.assertTrue(all(e["billing_id"] is None for e in self.stored()["entries"]))
 
     def test_unbilling_needs_new_faktury(self):
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"], version="1.3.0")
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"], version="1.3.0")
         self.billed("u-1", self.make_entries()[1])
         status, err = self.call("DELETE", "/api/billings/u-1")
         self.assertEqual(status, 400)
@@ -717,9 +750,9 @@ class ServerTests(TempData):
         self.assertEqual(len(fake.invoices), 1)
 
     def test_invoice_deleted_in_faktury_returns_entries(self):
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["contacts", "invoices"])
         _, ids = self.make_entries()
         self.billed("u-1", ids[:1])
         self.billed("u-2", ids[1:])
@@ -742,14 +775,14 @@ class ServerTests(TempData):
         _, now = self.call("GET", "/api/rev")
         self.assertNotEqual(now, first)
         self.assertEqual(own, now["rev"])
-        mejvos._write_json(mejvos.HOME / "invoices/faktury.json", {"items": []})  # Faktury zveřejnily stav
+        propojeni._write_json(propojeni.HOME / "invoices/faktury.json", {"items": []})  # Faktury zveřejnily stav
         self.assertNotEqual(self.call("GET", "/api/rev")[1], now)
 
     def test_failed_invoice_marks_nothing(self):
-        fake = FakeFaktury(mejvos.HOME)
+        fake = FakeFaktury(propojeni.HOME)
         fake.fail_with = "Chybí položky."
         self.addCleanup(fake.close)
-        MejvosTests.manifest(self, "faktury", api=fake.api, provides=["invoices"])
+        PropojeniTests.manifest(self, "faktury", api=fake.api, provides=["invoices"])
         _, ids = self.make_entries()
         status, body = self.call("POST", "/api/billings", {"uid": "u-2", "entry_ids": ids})
         self.assertEqual(status, 400)

@@ -26,8 +26,8 @@ jobs:
           cat "$support/data/server.log" || true
           curl -sf http://localhost:8766/api/version
           pgrep -x Hodinovka
-          test -f "$HOME/Library/Application Support/MejvOS/apps/hodinovka.json"  # přihlásila se do MejvOS
-          test -f "$HOME/Library/Application Support/MejvOS/contacts/hodinovka.json"
+          test -f "$HOME/Library/Application Support/Propojené aplikace/apps/hodinovka.json"  # zapsala se do sdílené složky
+          test -f "$HOME/Library/Application Support/Propojené aplikace/contacts/hodinovka.json"
           test ! -e "$support/python"  # Python na runneru je, nic se nestahovalo
           pkill -x Hodinovka
           kill "$(cat "$support/data/server.pid")"

@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import db
-import mejvos
+import propojeni
 import update
 
 PORT = int(os.environ.get("HODINOVKA_PORT", "8766"))
@@ -68,10 +68,10 @@ def ares_lookup(ico):
 def send_invoice(billing):
     """Vystaví ve Fakturách fakturu k vyúčtování a vrátí odkaz na ni. Faktury podle uid vyúčtování
     poznají opakovaný požadavek (třeba po výpadku) a vrátí už vystavenou fakturu místo nové."""
-    app = mejvos.ensure("invoices", exclude=db.APP_ID)
+    app = propojeni.ensure("invoices", exclude=db.APP_ID)
     if not app:
         raise ValueError("Na tomhle Macu nejsou Faktury. Nainstaluj je a zkus to znovu.")
-    created = mejvos.call(app, "POST", "invoices", {
+    created = propojeni.call(app, "POST", "invoices", {
         "customer": billing["customer"],
         "items": [{k: it[k] for k in ("description", "quantity", "unit", "price")} for it in billing["items"]],
         "note": billing["note"],
@@ -112,12 +112,12 @@ def unbill(ref):
         b = db.find_billing(data, ref)
         state = with_invoice_state([b])[0]["invoice_state"] or {}
         if b.get("invoice") and state.get("status") not in ("deleted", "cancelled"):
-            app = next((a for a in mejvos.apps(db.APP_ID) if a["id"] == b["invoice"]["app"]), None)
+            app = next((a for a in propojeni.apps(db.APP_ID) if a["id"] == b["invoice"]["app"]), None)
             if app:  # Faktury odinstalované: není co mazat
                 if update.parse_version(app.get("version") or "0") < (1, 4, 0):
                     raise ValueError(f"{app.get('name') or app['id']} neumí fakturu smazat, jsou moc staré. "
                                      f"Otevři je, nech je aktualizovat a zkus to znovu.")
-                mejvos.call(app, "POST", "invoices/delete", {"app": db.APP_ID, "ref": b["uid"]})
+                propojeni.call(app, "POST", "invoices/delete", {"app": db.APP_ID, "ref": b["uid"]})
         return db.delete_billing(data, ref)
 
 
@@ -142,8 +142,8 @@ def with_invoice_state(billings):
 
 
 def peers():
-    """Ostatní aplikace systému pro Nastavení a vyúčtování. ready = Faktury mají vyplněné údaje dodavatele."""
-    out = mejvos.overview(db.APP_ID)
+    """Ostatní propojené aplikace pro Nastavení a vyúčtování. ready = Faktury mají vyplněné údaje dodavatele."""
+    out = propojeni.overview(db.APP_ID)
     states = db.invoice_states()
     for a in out["apps"]:
         a["ready"] = (states.get(a["id"]) or {}).get("ready")
@@ -166,7 +166,7 @@ def filter_entries(data, q):
         rows = [e for e in rows if not e.get("billing_id")]
     elif one("stav") == "vyfakturovane":
         rows = [e for e in rows if e.get("billing_id")]
-    day = lambda e: mejvos.parse_time(e["start"]).astimezone().date().isoformat()  # noqa: E731
+    day = lambda e: propojeni.parse_time(e["start"]).astimezone().date().isoformat()  # noqa: E731
     if one("od"):
         rows = [e for e in rows if day(e) >= one("od")]
     if one("do"):
@@ -292,15 +292,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(peers())
         if res == "peers" and method == "POST" and isinstance(rid, str) and sub == "install":
             self.read_json()
-            mejvos.install(rid)
+            propojeni.install(rid)
             return self.send_json(peers())
         if res == "peers" and method == "POST" and isinstance(rid, str) and sub == "open":
             self.read_json()
-            mejvos.open_app(rid)
+            propojeni.open_app(rid)
             return self.send_json({"ok": True})
         if res == "os" and method == "GET" and rid is None:
             return self.send_json({"id": db.APP_ID, "name": NAME, "version": update.current_version(),
-                                   "protocol": mejvos.PROTOCOL, "provides": list(PROVIDES)})
+                                   "protocol": propojeni.PROTOCOL, "provides": list(PROVIDES)})
 
         db.sync_peers()
         if res == "rev" and method == "GET":
@@ -408,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                 return db.find_billing(data, rid)
 
         elif res == "os" and rid == "contacts" and method == "GET":
-            return [mejvos.contact(c) for c in data["clients"]]
+            return [propojeni.contact(c) for c in data["clients"]]
 
         elif res == "zaloha" and method == "GET":
             return {**db.cloud_status, "data": str(db.DATA).replace(str(Path.home()), "~", 1)}
@@ -428,8 +428,8 @@ def main():
     cloud = os.environ.get("HODINOVKA_ICLOUD") or ("" if test_data else str(db.ICLOUD_DEFAULT))
     if cloud:
         db.start_cloud_backup(cloud)
-    # Do sdíleného systému se testovací data přihlásí, jen když mají vlastní MEJVOS_DIR.
-    mejvos.ENABLED = not test_data or bool(os.environ.get("MEJVOS_DIR"))
+    # Do sdílené složky propojených aplikací se testovací data zapíšou, jen když mají vlastní PROPOJENI_DIR.
+    propojeni.ENABLED = not test_data or bool(os.environ.get("PROPOJENI_DIR"))
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     except OSError:
@@ -437,7 +437,7 @@ def main():
                  f"Otevři http://localhost:{PORT}")
     url = f"http://localhost:{PORT}"
     (db.DATA / "server.pid").write_text(str(os.getpid()))  # spouštěč podle něj pozná starou verzi
-    mejvos.announce(db.APP_ID, name=NAME, version=update.current_version(), port=PORT, root=db.ROOT,
+    propojeni.announce(db.APP_ID, name=NAME, version=update.current_version(), port=PORT, root=db.ROOT,
                     provides=PROVIDES, env={"HODINOVKA_APP": os.environ.get("HODINOVKA_APP")})
     with db.open_data() as data:
         db.publish(data)

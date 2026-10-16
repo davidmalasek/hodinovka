@@ -15,10 +15,10 @@ python3 -m unittest discover tests        # testy
 ```
 
 Bez závislostí: backend na standardní knihovně Pythonu a frontend v čistém JavaScriptu.
-Testovací data: `HODINOVKA_DATA=/jina/slozka HODINOVKA_PORT=8799 python3 server.py`. Do iCloudu se zálohují, jen když nastavíš `HODINOVKA_ICLOUD`, a do sdílené složky propojených aplikací se přihlásí, jen když nastavíš `MEJVOS_DIR`.
+Testovací data: `HODINOVKA_DATA=/jina/slozka HODINOVKA_PORT=8799 python3 server.py`. Do iCloudu se zálohují, jen když nastavíš `HODINOVKA_ICLOUD`, a do sdílené složky propojených aplikací se zapíšou, jen když nastavíš `PROPOJENI_DIR`.
 
 Vzhled, technika i texty jsou stejné jako u Faktur a popisuje je [styl.md](styl.md).
-Propojení s Fakturami a dalšími aplikacemi (vnitřně MejvOS) popisuje [mejvos.md](mejvos.md) a obstarává ho `mejvos.py`. Ten soubor je stejný ve všech aplikacích, takže když ho měníš, změň ho i ve Fakturách.
+Propojení s Fakturami a dalšími aplikacemi popisuje [propojeni.md](propojeni.md) a obstarává ho `propojeni.py`. Ten soubor je stejný ve všech aplikacích, takže když ho měníš, změň ho i ve Fakturách.
 
 ## Okno aplikace
 
@@ -38,7 +38,7 @@ Data jsou ve složce `~/Library/Application Support/Hodinovka/data` (ve vývojov
 | `data/hodinovka.json` | záznamy času, projekty, klienti, vyúčtování, nastavení (čitelný text) |
 | `data/zalohy/` | automatická záloha před první změnou každého dne (30 dní) a před každou aktualizací |
 | iCloud Drive → `Hodinovka záloha` | kopie všeho výše, aktualizuje se po každé změně |
-| `~/Library/Application Support/MejvOS` | co si Hodinovka a Faktury navzájem ukazují (klienti, stav faktur) |
+| `~/Library/Application Support/Propojené aplikace` | co si Hodinovka a Faktury navzájem ukazují (klienti, stav faktur) |
 
 Složka `data` se do gitu záměrně neukládá, protože obsahuje osobní údaje klientů.
 
@@ -46,7 +46,7 @@ Složka `data` se do gitu záměrně neukládá, protože obsahuje osobní údaj
 
 ## Aktualizace a vydání
 
-Hodinovka se při každém otevření podívá na GitHub, jestli nevyšla nová verze, a sama ji nainstaluje. Běžící časovač to nepřeruší. Před aktualizací se data zazálohují a data aktualizace nikdy nepřepíše.
+Hodinovka se při každém otevření podívá na GitHub, jestli nevyšla nová verze, a sama ji nainstaluje. Běžící časovač to nepřeruší. Před aktualizací se data zazálohují a data aktualizace nikdy nepřepíše. Soubory, které v nové verzi už nejsou, aktualizace smaže.
 Výjimečně se změní i okno aplikace. Pak se stáhne nová Hodinovka.app a appku je potřeba ukončit a otevřít znovu.
 
 **Vydání nové verze:** zvyš číslo v souboru `VERSION` a pushni do `main`.

@@ -120,8 +120,8 @@ const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ?
 const setTitle = t => (document.title = t ? `${t} – Hodinovka` : 'Hodinovka');
 const contactLabel = c => (c.ico ? `${c.name} (IČO ${c.ico})` : c.name);
 const offeredLabel = c => `${contactLabel(c)} — ${c.app_name}`;
-// Skutečná ikona aplikace systému. Ikony všech aplikací jsou v static/mejvos (v každé aplikaci stejné).
-const appIcon = (id, size = 16) => `<img class="app-icon" src="mejvos/${esc(encodeURIComponent(id))}.svg" alt="" width="${size}" height="${size}">`;
+// Skutečná ikona propojené aplikace. Ikony všech aplikací jsou v static/aplikace (v každé aplikaci stejné).
+const appIcon = (id, size = 16) => `<img class="app-icon" src="aplikace/${esc(encodeURIComponent(id))}.svg" alt="" width="${size}" height="${size}">`;
 const pickCustomer = c => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, c?.[k] || '']));
 const addressLines = p => [p.street, [p.zip, p.city].filter(Boolean).join(' '), p.country].filter(Boolean);
 
@@ -1261,7 +1261,7 @@ function renderBill(ids, preview, offered, peers) {
   drawItems();
 }
 
-/** Nainstaluje jinou aplikaci systému (stáhne ji z GitHubu do Aplikací a spustí). */
+/** Nainstaluje jinou propojenou aplikaci (stáhne ji z GitHubu do Aplikací a spustí). */
 function installPeer(id, button) {
   return attempt(async () => {
     toast('Stahuji a instaluji… může to minutu trvat');
